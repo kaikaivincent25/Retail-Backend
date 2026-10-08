@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
 from app.models.bulk_preset import BulkPreset
 from app.models.product import Product
+from app.models.sale import Sale, SaleItem
+from app.models.stock_movement import StockMovement
 from app.models.user import User
+from app.models.variant import Variant
 from app.schemas.bulk_preset import BulkPresetRead
 from app.schemas.product import (
     PopularVariant,
@@ -14,10 +17,8 @@ from app.schemas.product import (
     ProductRead,
     ProductUpdate,
     ProductWithVariantsRead,
+    VariantRead,
 )
-from sqlalchemy import case, func
-from app.models.sale import Sale, SaleItem
-from app.models.variant import Variant
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
@@ -85,7 +86,7 @@ def create_product(
         db.refresh(variant)
     return ProductWithVariantsRead(
         **ProductRead.model_validate(product).model_dump(),
-        variants=variants,
+        variants=[VariantRead.model_validate(variant) for variant in variants],
     )
 
 @router.get("/popular", response_model=list[PopularVariant])
@@ -121,6 +122,7 @@ def popular_products(
         .outerjoin(Sale, Sale.id == SaleItem.sale_id)
         .where(
             Product.shop_id == user.shop_id,
+            Product.is_active.is_(True),
             Variant.is_active.is_(True),
         )
         .group_by(
@@ -238,6 +240,19 @@ def update_product(
     return product
 
 
+@router.post("/{product_id}/reactivate", response_model=ProductRead)
+def reactivate_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    product = get_product_or_404(db, product_id, user.shop_id)
+    product.is_active = True
+    db.commit()
+    db.refresh(product)
+    return product
+
+
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
     product_id: int,
@@ -247,4 +262,49 @@ def delete_product(
     """Soft delete: the row stays, it is just deactivated."""
     product = get_product_or_404(db, product_id, user.shop_id)
     product.is_active = False
+    db.commit()
+
+
+@router.delete("/{product_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
+def permanently_delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    product = get_product_or_404(db, product_id, user.shop_id)
+    if product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deactivate the product before permanently deleting it",
+        )
+
+    variant_ids = db.scalars(
+        select(Variant.id).where(Variant.product_id == product.id)
+    ).all()
+    if variant_ids:
+        has_sales = db.scalar(
+            select(SaleItem.id)
+            .where(SaleItem.variant_id.in_(variant_ids))
+            .limit(1)
+        )
+        has_stock_movements = db.scalar(
+            select(StockMovement.id)
+            .where(StockMovement.variant_id.in_(variant_ids))
+            .limit(1)
+        )
+        if has_sales or has_stock_movements:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This product has sales or stock history and cannot be "
+                    "permanently deleted. Keep it deactivated instead."
+                ),
+            )
+
+        db.execute(
+            delete(BulkPreset).where(BulkPreset.variant_id.in_(variant_ids))
+        )
+        db.execute(delete(Variant).where(Variant.id.in_(variant_ids)))
+
+    db.delete(product)
     db.commit()

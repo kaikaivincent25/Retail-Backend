@@ -109,3 +109,113 @@ def test_duplicate_product_name_rejected(client, admin_token):
     client.post("/products", json={"name": "Sugar"}, headers=headers)
     resp = client.post("/products", json={"name": "Sugar"}, headers=headers)
     assert resp.status_code == 409
+
+
+def test_deactivated_products_can_be_listed_and_reactivated(client, admin_token, cashier_token):
+    admin_headers = auth_headers(admin_token)
+    product = client.post(
+        "/products", json={"name": "Rice"}, headers=admin_headers
+    ).json()
+    assert client.delete(
+        f"/products/{product['id']}", headers=admin_headers
+    ).status_code == 204
+
+    assert client.get("/products", headers=auth_headers(cashier_token)).json() == []
+    inactive = client.get(
+        "/products?include_inactive=true", headers=admin_headers
+    ).json()
+    assert len(inactive) == 1
+    assert inactive[0]["is_active"] is False
+
+    response = client.post(
+        f"/products/{product['id']}/reactivate", headers=admin_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["is_active"] is True
+    assert len(client.get("/products", headers=auth_headers(cashier_token)).json()) == 1
+
+
+def test_permanent_delete_removes_deactivated_product_and_variants(client, admin_token):
+    headers = auth_headers(admin_token)
+    product = client.post(
+        "/products",
+        json={
+            "name": "Tea",
+            "variants": [{"name": "Box", "unit": "piece", "selling_price": 50}],
+        },
+        headers=headers,
+    ).json()
+    assert client.delete(
+        f"/products/{product['id']}", headers=headers
+    ).status_code == 204
+
+    response = client.delete(
+        f"/products/{product['id']}/permanent", headers=headers
+    )
+    assert response.status_code == 204
+    assert client.get(f"/products/{product['id']}", headers=headers).status_code == 404
+
+
+def test_permanent_delete_requires_deactivation(client, admin_token):
+    headers = auth_headers(admin_token)
+    product = client.post(
+        "/products", json={"name": "Flour"}, headers=headers
+    ).json()
+    response = client.delete(
+        f"/products/{product['id']}/permanent", headers=headers
+    )
+    assert response.status_code == 409
+
+
+def test_permanent_delete_preserves_products_with_stock_history(client, admin_token):
+    headers = auth_headers(admin_token)
+    product = client.post(
+        "/products",
+        json={
+            "name": "Coffee",
+            "variants": [{"name": "Jar", "unit": "piece", "selling_price": 100}],
+        },
+        headers=headers,
+    ).json()
+    variant = product["variants"][0]
+    adjustment = client.post(
+        f"/inventory/{variant['id']}/adjust",
+        json={"delta": 5, "movement_type": "purchase", "reason": "opening stock"},
+        headers=headers,
+    )
+    assert adjustment.status_code == 200
+    assert client.delete(
+        f"/products/{product['id']}", headers=headers
+    ).status_code == 204
+
+    response = client.delete(
+        f"/products/{product['id']}/permanent", headers=headers
+    )
+    assert response.status_code == 409
+    assert "stock history" in response.json()["detail"]
+    assert client.get(
+        f"/products/{product['id']}", headers=headers
+    ).status_code == 200
+
+
+def test_deactivated_products_are_excluded_from_variant_browse(client, admin_token, cashier_token):
+    headers = auth_headers(admin_token)
+    product = client.post(
+        "/products",
+        json={
+            "name": "Soap",
+            "variants": [{"name": "Bar", "unit": "piece", "selling_price": 20}],
+        },
+        headers=headers,
+    ).json()
+    assert client.delete(
+        f"/products/{product['id']}", headers=headers
+    ).status_code == 204
+
+    browse = client.get("/variants", headers=auth_headers(cashier_token))
+    assert browse.status_code == 200
+    assert browse.json() == []
+    assert client.get(
+        f"/products/{product['id']}/variants",
+        headers=auth_headers(cashier_token),
+    ).status_code == 404

@@ -76,7 +76,9 @@ def list_variants_for_product(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
-    get_owned_product(db, product_id, user.shop_id)
+    product = get_owned_product(db, product_id, user.shop_id)
+    if not product.is_active and user.role.value == "cashier":
+        raise HTTPException(status_code=404, detail="Product not found")
 
     query = select(Variant).where(Variant.product_id == product_id)
     if not (include_inactive and user.role.value in ("admin", "manager")):
@@ -104,7 +106,11 @@ def browse_variants(
             Variant.quantity.label("quantity_in_stock"),
         )
         .join(Product, Product.id == Variant.product_id)
-        .where(Product.shop_id == user.shop_id, Variant.is_active.is_(True))
+        .where(
+            Product.shop_id == user.shop_id,
+            Product.is_active.is_(True),
+            Variant.is_active.is_(True),
+        )
     )
 
     if q:
