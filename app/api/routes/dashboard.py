@@ -8,8 +8,11 @@ from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
 from app.models.cash_session import CashSession, SessionStatus
 from app.models.expense import Expense
+from app.models.product import Product
 from app.models.sale import Sale, SaleStatus
+from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
+from app.models.variant import Variant
 from app.schemas.dashboard import (
     CashierDashboardSummary,
     DashboardSummary,
@@ -32,6 +35,7 @@ def dashboard_summary(
         date=result["start_date"],
         total_sales=result["total_sales"],
         expense_total=result["expense_total"],
+        staff_consumption_total=result["staff_consumption_total"],
         net_sales=result["net_sales"],
         transaction_count=result["transaction_count"],
         estimated_profit=result["estimated_profit"],
@@ -72,6 +76,22 @@ def cashier_dashboard_summary(
         )
     ) or 0
 
+    staff_consumption_total = db.scalar(
+        select(
+            func.coalesce(
+                func.sum(-StockMovement.quantity * StockMovement.unit_cost_at_time), 0
+            )
+        )
+        .join(Variant, Variant.id == StockMovement.variant_id)
+        .join(Product, Product.id == Variant.product_id)
+        .where(
+            Product.shop_id == user.shop_id,
+            StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
+            StockMovement.created_at >= start,
+            StockMovement.created_at <= end,
+        )
+    ) or 0
+
     recent_sales = db.scalars(
         select(Sale)
         .where(*shop_sales)
@@ -92,6 +112,7 @@ def cashier_dashboard_summary(
         date=today.isoformat(),
         total_sales=total_sales,
         expense_total=expense_total,
+        staff_consumption_total=staff_consumption_total,
         net_sales=total_sales - expense_total,
         transaction_count=transaction_count,
         current_session=get_open_session(db, user.shop_id),

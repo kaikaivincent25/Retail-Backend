@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from tests.conftest import auth_headers
@@ -44,6 +44,37 @@ def _create_bulk_variant(client, admin_token, quantity=50000):
     return variant
 
 
+def _start_mpesa_sale(client, db, admin_token, cashier_token, cashier_user, monkeypatch, quantity=100):
+    from app.models.variant import Variant
+
+    variant = _create_bulk_variant(client, admin_token, quantity=500)
+    _open_session(db, cashier_user, Decimal("500.00"))
+    requested = {}
+
+    def fake_stk_push(sale_id, amount, phone_number):
+        requested.update(
+            sale_id=sale_id,
+            amount=amount,
+            phone_number=phone_number,
+        )
+        return {
+            "checkout_request_id": f"ws_CO_{sale_id}",
+            "merchant_request_id": f"mr_{sale_id}",
+        }
+
+    monkeypatch.setattr("app.api.routes.sales.request_stk_push", fake_stk_push)
+    response = client.post(
+        "/sales/mpesa",
+        json={
+            "items": [{"variant_id": variant["id"], "quantity": quantity}],
+            "phone_number": "0712345678",
+            "amount": 0.01,
+        },
+        headers=auth_headers(cashier_token),
+    )
+    return response, requested, db.get(Variant, variant["id"])
+
+
 def test_sale_deducts_stock(client, db, admin_token, cashier_token, cashier_user):
     variant = _create_bulk_variant(client, admin_token, quantity=1000)
     opened = _open_session(db, cashier_user, Decimal("500.00"))
@@ -62,6 +93,216 @@ def test_sale_deducts_stock(client, db, admin_token, cashier_token, cashier_user
     stock_resp = client.get("/inventory", headers=auth_headers(cashier_token))
     updated = next(v for v in stock_resp.json() if v["id"] == variant["id"])
     assert updated["quantity"] == 700  # 1000 - 300
+
+
+def test_mpesa_stk_uses_server_total_and_completes_only_on_matching_callback(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    response, requested, variant = _start_mpesa_sale(
+        client, db, admin_token, cashier_token, cashier_user, monkeypatch
+    )
+    assert response.status_code == 202, response.text
+    sale = response.json()
+    assert sale["total"] == 14.0
+    assert sale["amount_received"] == 0.0
+    assert sale["payment_method"] == "mpesa"
+    assert sale["status"] == "pending"
+    assert requested["amount"] == Decimal("14.00")
+    assert requested["phone_number"] == "254712345678"
+    db.refresh(variant)
+    assert variant.quantity == 400
+
+    callback = client.post(
+        "/sales/mpesa/callback",
+        json={
+            "Body": {
+                "stkCallback": {
+                    "MerchantRequestID": requested["merchant_request_id"],
+                    "CheckoutRequestID": requested["checkout_request_id"],
+                    "ResultCode": 0,
+                    "CallbackMetadata": {
+                        "Item": [
+                            {"Name": "Amount", "Value": 14},
+                            {"Name": "MpesaReceiptNumber", "Value": "QGH123ABC"},
+                            {"Name": "PhoneNumber", "Value": 254712345678},
+                        ]
+                    },
+                }
+            }
+        },
+    )
+    assert callback.status_code == 200, callback.text
+    detail = client.get(f"/sales/{sale['id']}", headers=auth_headers(cashier_token))
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["status"] == "completed"
+    assert detail.json()["amount_received"] == 14.0
+    assert detail.json()["mpesa_receipt_number"] == "QGH123ABC"
+    db.refresh(variant)
+    assert variant.quantity == 400
+
+
+def test_failed_mpesa_callback_releases_reserved_stock(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    response, requested, variant = _start_mpesa_sale(
+        client, db, admin_token, cashier_token, cashier_user, monkeypatch
+    )
+    assert response.status_code == 202, response.text
+
+    callback = client.post(
+        "/sales/mpesa/callback",
+        json={
+            "Body": {
+                "stkCallback": {
+                    "MerchantRequestID": requested["merchant_request_id"],
+                    "CheckoutRequestID": requested["checkout_request_id"],
+                    "ResultCode": 1032,
+                    "ResultDesc": "Request cancelled by user",
+                }
+            }
+        },
+    )
+    assert callback.status_code == 200, callback.text
+    detail = client.get(
+        f"/sales/{response.json()['id']}",
+        headers=auth_headers(cashier_token),
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["status"] == "failed"
+    db.refresh(variant)
+    assert variant.quantity == 500
+
+
+def test_mpesa_fractional_total_is_rejected_without_stock_change(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    variant_data = _create_bulk_variant(client, admin_token, quantity=500)
+    _open_session(db, cashier_user, Decimal("500.00"))
+    stk_called = False
+
+    def fake_stk_push(*args):
+        nonlocal stk_called
+        stk_called = True
+        return {}
+
+    monkeypatch.setattr("app.api.routes.sales.request_stk_push", fake_stk_push)
+    response = client.post(
+        "/sales/mpesa",
+        json={
+            "items": [{"variant_id": variant_data["id"], "quantity": 1}],
+            "phone_number": "0712345678",
+        },
+        headers=auth_headers(cashier_token),
+    )
+    assert response.status_code == 422
+    assert not stk_called
+    from app.models.variant import Variant
+
+    assert db.get(Variant, variant_data["id"]).quantity == 500
+
+
+def test_manual_mpesa_payment_is_pending_until_cashier_confirms_receipt(
+    client, db, admin_token, cashier_token, cashier_user
+):
+    from app.models.variant import Variant
+
+    variant = _create_bulk_variant(client, admin_token, quantity=500)
+    _open_session(db, cashier_user, Decimal("500.00"))
+    admin_headers = auth_headers(admin_token)
+    cashier_headers = auth_headers(cashier_token)
+    configured = client.patch(
+        "/shop",
+        json={
+            "mpesa_pochi_number": "0711222333",
+            "mpesa_paybill_number": "123456",
+            "mpesa_paybill_account_number": "SHOP-001",
+        },
+        headers=admin_headers,
+    )
+    assert configured.status_code == 200, configured.text
+
+    destinations = client.get("/shop/payment-destinations", headers=cashier_headers)
+    assert destinations.status_code == 200, destinations.text
+    assert [option["method"] for option in destinations.json()] == ["pochi", "paybill"]
+
+    response = client.post(
+        "/sales/manual-mpesa",
+        json={
+            "items": [{"variant_id": variant["id"], "quantity": 100}],
+            "payment_method": "paybill",
+        },
+        headers=cashier_headers,
+    )
+    assert response.status_code == 202, response.text
+    pending_sale = response.json()
+    assert pending_sale["status"] == "pending"
+    assert pending_sale["payment_method"] == "paybill"
+    assert pending_sale["amount_received"] == 0
+    assert pending_sale["payment_destination_number"] == "123456"
+    assert pending_sale["payment_account_number"] == "SHOP-001"
+
+    db.refresh(db.get(Variant, variant["id"]))
+    assert db.get(Variant, variant["id"]).quantity == 400
+
+    confirmation = client.post(
+        f"/sales/{pending_sale['id']}/manual-payment/confirm",
+        json={"receipt_number": " QGH123ABC "},
+        headers=cashier_headers,
+    )
+    assert confirmation.status_code == 200, confirmation.text
+    completed_sale = confirmation.json()
+    assert completed_sale["status"] == "completed"
+    assert completed_sale["amount_received"] == completed_sale["total"]
+    assert completed_sale["mpesa_receipt_number"] == "QGH123ABC"
+    assert completed_sale["payment_destination_number"] == "123456"
+    assert client.post(
+        f"/sales/{pending_sale['id']}/manual-payment/confirm",
+        json={"receipt_number": "QGH123ABC"},
+        headers=cashier_headers,
+    ).status_code == 200
+
+
+def test_cancelled_manual_mpesa_sale_releases_reserved_stock(
+    client, db, admin_token, cashier_token, cashier_user
+):
+    from app.models.variant import Variant
+
+    variant = _create_bulk_variant(client, admin_token, quantity=500)
+    _open_session(db, cashier_user)
+    configured = client.patch(
+        "/shop",
+        json={"mpesa_till_number": "998877"},
+        headers=auth_headers(admin_token),
+    )
+    assert configured.status_code == 200, configured.text
+
+    pending = client.post(
+        "/sales/manual-mpesa",
+        json={
+            "items": [{"variant_id": variant["id"], "quantity": 100}],
+            "payment_method": "till",
+        },
+        headers=auth_headers(cashier_token),
+    )
+    assert pending.status_code == 202, pending.text
+    cancelled = client.post(
+        f"/sales/{pending.json()['id']}/manual-payment/cancel",
+        headers=auth_headers(cashier_token),
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "failed"
+    db.refresh(db.get(Variant, variant["id"]))
+    assert db.get(Variant, variant["id"]).quantity == 500
+
+
+def test_paybill_settings_require_account_number(client, admin_token):
+    response = client.patch(
+        "/shop",
+        json={"mpesa_paybill_number": "123456"},
+        headers=auth_headers(admin_token),
+    )
+    assert response.status_code == 422
+    assert "account number" in response.json()["detail"].lower()
 
 
 def test_sale_without_open_session_rejected(client, admin_token, cashier_token):
@@ -161,6 +402,64 @@ def test_closing_cash_at_or_below_expected_is_allowed(
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == SessionStatus.CLOSED.value
         assert resp.json()["difference"] == expected_difference
+
+
+def test_staff_consumption_reduces_stock_but_not_expected_cash(
+    client, db, admin_token, cashier_token, cashier_user
+):
+    from app.models.stock_movement import MovementType, StockMovement
+    from app.models.variant import Variant
+
+    variant_data = _create_bulk_variant(client, admin_token, quantity=500)
+    _open_session(db, cashier_user, Decimal("100.00"))
+
+    bypass = client.post(
+        f"/inventory/{variant_data['id']}/adjust",
+        json={"delta": -10, "movement_type": "staff_consumption"},
+        headers=auth_headers(admin_token),
+    )
+    assert bypass.status_code == 422
+
+    consumption = client.post(
+        f"/inventory/{variant_data['id']}/staff-consumption",
+        json={"quantity": 10, "reason": "Staff lunch"},
+        headers=auth_headers(cashier_token),
+    )
+    assert consumption.status_code == 201, consumption.text
+    assert consumption.json()["movement_type"] == MovementType.STAFF_CONSUMPTION.value
+    assert consumption.json()["quantity"] == -10
+    assert Decimal(str(consumption.json()["unit_cost_at_time"])) == Decimal("0.12")
+
+    expense = client.post(
+        "/expenses",
+        json={"category": "Transport", "amount": 5},
+        headers=auth_headers(cashier_token),
+    )
+    assert expense.status_code == 201, expense.text
+
+    stock = db.get(Variant, variant_data["id"])
+    assert stock.quantity == 490
+    movement = db.get(StockMovement, consumption.json()["id"])
+    assert movement is not None
+
+    report = client.get(
+        f"/reports/summary?start_date={date.today()}&end_date={date.today()}",
+        headers=auth_headers(admin_token),
+    )
+    assert report.status_code == 200, report.text
+    assert report.json()["expense_total"] == 5.0
+    assert report.json()["staff_consumption_total"] == 1.2
+    assert report.json()["net_sales"] == -5.0
+    assert report.json()["transaction_count"] == 0
+    assert report.json()["daily_breakdown"][0]["staff_consumption_total"] == 1.2
+
+    closed = client.post(
+        "/cash-sessions/close",
+        json={"closing_cash": 95},
+        headers=auth_headers(cashier_token),
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["expected_cash"] == 95.0
 
 
 def test_cashier_dashboard_shows_shop_sales_and_shared_till(

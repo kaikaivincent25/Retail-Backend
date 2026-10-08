@@ -15,3 +15,7 @@ class Shop(TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(
         String(3), default="KES", server_default="KES", nullable=False
     )
+    mpesa_pochi_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mpesa_till_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mpesa_paybill_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    mpesa_paybill_account_number: Mapped[str | None] = mapped_column(String(100), nullable=True)

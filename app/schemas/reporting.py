@@ -9,6 +9,7 @@ class DailyTotal(BaseModel):
     date: str
     total: Decimal
     expense_total: Decimal
+    staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal
 
 
@@ -17,6 +18,7 @@ class PeriodReport(BaseModel):
     end_date: str
     total_sales: Decimal
     expense_total: Decimal
+    staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal
     transaction_count: int
     estimated_profit: Decimal

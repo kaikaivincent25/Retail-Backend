@@ -8,6 +8,7 @@ from app.models.product import Product
 from app.models.cash_session import CashSession
 from app.models.expense import Expense
 from app.models.sale import Sale, SaleItem, SaleStatus
+from app.models.stock_movement import MovementType, StockMovement
 from app.models.variant import Variant
 
 
@@ -36,6 +37,22 @@ def summarize_period(db: Session, shop_id: int, start: date, end: date) -> dict:
         )
     )
     expense_total = db.scalar(expense_query) or Decimal("0.00")
+
+    staff_consumption_total = db.scalar(
+        select(
+            func.coalesce(
+                func.sum(-StockMovement.quantity * StockMovement.unit_cost_at_time), 0
+            )
+        )
+        .join(Variant, Variant.id == StockMovement.variant_id)
+        .join(Product, Product.id == Variant.product_id)
+        .where(
+            Product.shop_id == shop_id,
+            StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
+            StockMovement.created_at >= start_dt,
+            StockMovement.created_at <= end_dt,
+        )
+    ) or Decimal("0.00")
 
     profit_query = (
         select(func.sum((SaleItem.unit_price - Variant.cost_price) * SaleItem.quantity))
@@ -90,6 +107,7 @@ def summarize_period(db: Session, shop_id: int, start: date, end: date) -> dict:
             "date": r.day.isoformat(),
             "total": Decimal(str(r.total)) if r.total is not None else Decimal("0.00"),
             "expense_total": Decimal("0.00"),
+            "staff_consumption_total": Decimal("0.00"),
             "net_sales": Decimal(str(r.total)) if r.total is not None else Decimal("0.00"),
         }
         for r in db.execute(daily_query).all()
@@ -112,10 +130,47 @@ def summarize_period(db: Session, shop_id: int, start: date, end: date) -> dict:
         amount = Decimal(str(row.total)) if row.total is not None else Decimal("0.00")
         entry = daily_totals.setdefault(
             day,
-            {"date": day, "total": Decimal("0.00"), "expense_total": Decimal("0.00"), "net_sales": Decimal("0.00")},
+            {
+                "date": day,
+                "total": Decimal("0.00"),
+                "expense_total": Decimal("0.00"),
+                "staff_consumption_total": Decimal("0.00"),
+                "net_sales": Decimal("0.00"),
+            },
         )
         entry["expense_total"] = amount
         entry["net_sales"] = entry["total"] - amount
+
+    daily_staff_consumption_query = (
+        select(
+            func.date(StockMovement.created_at).label("day"),
+            func.sum(-StockMovement.quantity * StockMovement.unit_cost_at_time).label("total"),
+        )
+        .join(Variant, Variant.id == StockMovement.variant_id)
+        .join(Product, Product.id == Variant.product_id)
+        .where(
+            Product.shop_id == shop_id,
+            StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
+            StockMovement.created_at >= start_dt,
+            StockMovement.created_at <= end_dt,
+        )
+        .group_by(func.date(StockMovement.created_at))
+        .order_by(func.date(StockMovement.created_at))
+    )
+    for row in db.execute(daily_staff_consumption_query).all():
+        day = row.day.isoformat()
+        amount = Decimal(str(row.total)) if row.total is not None else Decimal("0.00")
+        entry = daily_totals.setdefault(
+            day,
+            {
+                "date": day,
+                "total": Decimal("0.00"),
+                "expense_total": Decimal("0.00"),
+                "staff_consumption_total": Decimal("0.00"),
+                "net_sales": Decimal("0.00"),
+            },
+        )
+        entry["staff_consumption_total"] = amount
     daily_breakdown = sorted(daily_totals.values(), key=lambda entry: entry["date"])
 
     return {
@@ -123,6 +178,7 @@ def summarize_period(db: Session, shop_id: int, start: date, end: date) -> dict:
         "end_date": end.isoformat(),
         "total_sales": total_sales.quantize(Decimal("0.01")),
         "expense_total": expense_total.quantize(Decimal("0.01")),
+        "staff_consumption_total": staff_consumption_total.quantize(Decimal("0.01")),
         "net_sales": (total_sales - expense_total).quantize(Decimal("0.01")),
         "transaction_count": transaction_count,
         "estimated_profit": estimated_profit.quantize(Decimal("0.01")),

@@ -19,12 +19,14 @@ class ActivityAction(str, enum.Enum):
     CASH_SESSION_OPENED = "cash_session_opened"
     CASH_SESSION_CLOSED = "cash_session_closed"
     EXPENSE_LOGGED = "expense_logged"
+    STAFF_CONSUMPTION_RECORDED = "staff_consumption_recorded"
 
 
 HIGH_RISK_ACTIONS = {
     ActivityAction.SALE_VOIDED,
     ActivityAction.CART_CLEARED,
     ActivityAction.INVENTORY_ADJUSTED,
+    ActivityAction.STAFF_CONSUMPTION_RECORDED,
 }
 
 

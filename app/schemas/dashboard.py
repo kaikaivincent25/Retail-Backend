@@ -17,6 +17,7 @@ class DashboardSummary(BaseModel):
     date: str
     total_sales: Decimal
     expense_total: Decimal
+    staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal
     transaction_count: int
     estimated_profit: Decimal
@@ -38,6 +39,7 @@ class CashierDashboardSummary(BaseModel):
     date: str
     total_sales: Decimal
     expense_total: Decimal
+    staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal
     transaction_count: int
     current_session: CashSessionRead | None

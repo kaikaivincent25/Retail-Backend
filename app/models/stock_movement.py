@@ -1,6 +1,7 @@
 import enum
+from decimal import Decimal
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import Enum, ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -13,6 +14,7 @@ class MovementType(str, enum.Enum):
     SALE = "sale"               # stock leaving via a sale (Phase 9/10 will create these)
     ADJUSTMENT = "adjustment"   # manual correction (stocktake mismatch, etc.)
     DAMAGE = "damage"           # stock written off (breakage, spoilage, theft)
+    STAFF_CONSUMPTION = "staff_consumption"
 
 
 class StockMovement(TimestampMixin, Base):
@@ -31,5 +33,6 @@ class StockMovement(TimestampMixin, Base):
     new_quantity: Mapped[int] = mapped_column(nullable=False)
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    unit_cost_at_time: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     variant: Mapped[Variant] = relationship()

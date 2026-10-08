@@ -12,11 +12,17 @@ from app.models.user import User
 
 class PaymentMethod(str, enum.Enum):
     CASH = "cash"
+    MPESA = "mpesa"
+    POCHI = "pochi"
+    TILL = "till"
+    PAYBILL = "paybill"
 
 
 class SaleStatus(str, enum.Enum):
     COMPLETED = "completed"
     VOIDED = "voided"   # used from Phase 13 onward; not created by any code yet
+    PENDING = "pending"
+    FAILED = "failed"
 
 
 class Sale(TimestampMixin, Base):
@@ -41,6 +47,12 @@ class Sale(TimestampMixin, Base):
         default=SaleStatus.COMPLETED,
         nullable=False,
     )
+    mpesa_checkout_request_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    mpesa_merchant_request_id: Mapped[str | None] = mapped_column(String(100))
+    mpesa_phone_number: Mapped[str | None] = mapped_column(String(12))
+    mpesa_receipt_number: Mapped[str | None] = mapped_column(String(30))
+    payment_destination_number: Mapped[str | None] = mapped_column(String(50))
+    payment_account_number: Mapped[str | None] = mapped_column(String(100))
 
     shop: Mapped[Shop] = relationship()
     cashier: Mapped[User] = relationship()

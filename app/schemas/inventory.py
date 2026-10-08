@@ -1,3 +1,6 @@
+from datetime import datetime
+from decimal import Decimal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.stock_movement import MovementType
@@ -7,6 +10,11 @@ from app.models.variant import SaleMode, Unit
 class StockAdjustment(BaseModel):
     delta: int = Field(..., description="Signed change: positive adds stock, negative removes it")
     movement_type: MovementType = MovementType.ADJUSTMENT
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class StaffConsumptionCreate(BaseModel):
+    quantity: int = Field(..., gt=0)
     reason: str | None = Field(default=None, max_length=255)
 
 
@@ -34,3 +42,5 @@ class StockMovementRead(BaseModel):
     new_quantity: int
     reason: str | None
     user_id: int
+    created_at: datetime
+    unit_cost_at_time: Decimal | None = None

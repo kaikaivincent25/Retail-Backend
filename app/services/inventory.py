@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
 from app.models.stock_movement import MovementType, StockMovement
@@ -11,6 +13,7 @@ def apply_stock_change(
     movement_type: MovementType,
     user_id: int,
     reason: str | None = None,
+    unit_cost_at_time: Decimal | None = None,
 ) -> StockMovement:
     """
     The ONLY function allowed to change variant.quantity.
@@ -36,6 +39,7 @@ def apply_stock_change(
         new_quantity=new,
         reason=reason,
         user_id=user_id,
+        unit_cost_at_time=unit_cost_at_time,
     )
     db.add(movement)
     return movement

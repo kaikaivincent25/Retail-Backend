@@ -8,7 +8,12 @@ from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User
 from app.models.variant import Variant
-from app.schemas.inventory import StockAdjustment, StockMovementRead, VariantStockRead
+from app.schemas.inventory import (
+    StaffConsumptionCreate,
+    StockAdjustment,
+    StockMovementRead,
+    VariantStockRead,
+)
 from app.services.inventory import apply_stock_change
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
@@ -71,6 +76,11 @@ def adjust_stock(
             status_code=422,
             detail="SALE movements can only be created by completing a sale",
         )
+    if payload.movement_type == MovementType.STAFF_CONSUMPTION:
+        raise HTTPException(
+            status_code=422,
+            detail="STAFF_CONSUMPTION movements can only be created through staff consumption",
+        )
 
     variant = get_owned_variant(db, variant_id, user.shop_id)
 
@@ -95,6 +105,55 @@ def adjust_stock(
     db.commit()
     db.refresh(variant)
     return variant
+
+
+@router.post("/{variant_id}/staff-consumption", response_model=StockMovementRead, status_code=201)
+def record_staff_consumption(
+    variant_id: int,
+    payload: StaffConsumptionCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    variant = db.scalar(
+        select(Variant)
+        .join(Product)
+        .where(Variant.id == variant_id, Product.shop_id == user.shop_id)
+        .with_for_update()
+    )
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+
+    reason = (
+        payload.reason.strip()
+        if payload.reason and payload.reason.strip()
+        else "Staff consumption"
+    )
+    try:
+        movement = apply_stock_change(
+            db,
+            variant,
+            delta=-payload.quantity,
+            movement_type=MovementType.STAFF_CONSUMPTION,
+            user_id=user.id,
+            reason=reason,
+            unit_cost_at_time=variant.cost_price,
+        )
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
+
+    db.flush()
+    log_activity(
+        db,
+        user_id=user.id,
+        action=ActivityAction.STAFF_CONSUMPTION_RECORDED,
+        entity_type="stock_movement",
+        entity_id=movement.id,
+        description=f"{payload.quantity} of {variant.name}: {reason}"[:255],
+    )
+    db.commit()
+    db.refresh(movement)
+    return movement
 
 
 @router.get("/{variant_id}/movements", response_model=list[StockMovementRead])

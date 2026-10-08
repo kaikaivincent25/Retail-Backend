@@ -6,11 +6,33 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_cashier
 from app.core.database import get_db
-from app.models.sale import Sale
+from app.models.sale import PaymentMethod, Sale, SaleStatus
+from app.models.shop import Shop
 from app.models.user import User
-from app.schemas.sale import SaleCreate, SaleRead
+from app.schemas.sale import (
+    ManualMpesaSaleCreate,
+    ManualPaymentConfirm,
+    MpesaSaleCreate,
+    SaleCreate,
+    SaleRead,
+)
 from app.services.cash_sessions import get_open_session
-from app.services.sales import SaleError, complete_sale
+from app.services.mpesa import (
+    MpesaConfigurationError,
+    MpesaRequestError,
+    ensure_mpesa_configured,
+    normalize_phone_number,
+    process_stk_callback,
+    request_stk_push,
+)
+from app.services.sales import (
+    SaleError,
+    confirm_manual_payment,
+    complete_sale,
+    create_pending_manual_sale,
+    create_pending_mpesa_sale,
+    release_pending_sale,
+)
 
 router = APIRouter(prefix="/sales", tags=["Sales"])
 
@@ -42,6 +64,148 @@ def create_sale(
         raise HTTPException(status_code=422, detail=str(e))
 
     return sale
+
+
+@router.post("/mpesa", response_model=SaleRead, status_code=202)
+def create_mpesa_sale(
+    payload: MpesaSaleCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    session = get_open_session(db, user.shop_id, lock=True)
+    if session is None:
+        raise HTTPException(
+            status_code=422,
+            detail="You must open a cash session before making a sale",
+        )
+    sale: Sale | None = None
+    try:
+        ensure_mpesa_configured()
+        phone_number = normalize_phone_number(payload.phone_number)
+        sale = create_pending_mpesa_sale(
+            db,
+            shop_id=user.shop_id,
+            cashier_id=user.id,
+            items=[item.model_dump() for item in payload.items],
+            phone_number=phone_number,
+            session_id=session.id,
+        )
+        identifiers = request_stk_push(sale.id, sale.total, phone_number)
+        sale.mpesa_checkout_request_id = identifiers["checkout_request_id"]
+        sale.mpesa_merchant_request_id = identifiers["merchant_request_id"]
+        db.commit()
+        db.refresh(sale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SaleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except MpesaConfigurationError as exc:
+        if sale is not None:
+            release_pending_sale(db, sale.id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except MpesaRequestError as exc:
+        if exc.definitive_rejection and sale is not None:
+            release_pending_sale(db, sale.id)
+        detail = str(exc)
+        if not exc.definitive_rejection and sale is not None:
+            detail = f"{detail} Pending sale #{sale.id} remains reserved; do not retry until checked."
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    return sale
+
+
+@router.post("/manual-mpesa", response_model=SaleRead, status_code=202)
+def create_manual_mpesa_sale(
+    payload: ManualMpesaSaleCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    session = get_open_session(db, user.shop_id, lock=True)
+    if session is None:
+        raise HTTPException(
+            status_code=422,
+            detail="You must open a cash session before making a sale",
+        )
+
+    shop = db.get(Shop, user.shop_id)
+    destinations = {
+        PaymentMethod.POCHI: (shop.mpesa_pochi_number, None),
+        PaymentMethod.TILL: (shop.mpesa_till_number, None),
+        PaymentMethod.PAYBILL: (
+            shop.mpesa_paybill_number,
+            shop.mpesa_paybill_account_number,
+        ),
+    }
+    destination_number, account_number = destinations[payload.payment_method]
+    if not destination_number or (
+        payload.payment_method == PaymentMethod.PAYBILL and not account_number
+    ):
+        raise HTTPException(status_code=422, detail="This M-Pesa payment option is not configured")
+
+    try:
+        return create_pending_manual_sale(
+            db,
+            shop_id=user.shop_id,
+            cashier_id=user.id,
+            items=[item.model_dump() for item in payload.items],
+            payment_method=payload.payment_method,
+            destination_number=destination_number,
+            account_number=account_number,
+            session_id=session.id,
+        )
+    except SaleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/{sale_id}/manual-payment/confirm", response_model=SaleRead)
+def confirm_manual_mpesa_sale(
+    sale_id: int,
+    payload: ManualPaymentConfirm,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    sale = db.scalar(
+        _sale_query_for_shop(user.shop_id).where(Sale.id == sale_id).with_for_update()
+    )
+    if sale is None or (user.role.value == "cashier" and sale.cashier_id != user.id):
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if sale.status == SaleStatus.COMPLETED and sale.mpesa_receipt_number == payload.receipt_number:
+        return sale
+    try:
+        return confirm_manual_payment(db, sale, payload.receipt_number, user.id)
+    except SaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{sale_id}/manual-payment/cancel", response_model=SaleRead)
+def cancel_manual_mpesa_sale(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    sale = db.scalar(
+        _sale_query_for_shop(user.shop_id).where(Sale.id == sale_id).with_for_update()
+    )
+    if sale is None or (user.role.value == "cashier" and sale.cashier_id != user.id):
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if sale.payment_method not in {PaymentMethod.POCHI, PaymentMethod.TILL, PaymentMethod.PAYBILL}:
+        raise HTTPException(status_code=409, detail="This sale is not a manual M-Pesa payment")
+    if sale.status != SaleStatus.PENDING:
+        raise HTTPException(status_code=409, detail="Only a pending payment can be cancelled")
+    cancelled = release_pending_sale(db, sale.id)
+    return cancelled
+
+
+@router.post("/mpesa/callback")
+def mpesa_callback(payload: dict, db: Session = Depends(get_db)):
+    try:
+        processed = process_stk_callback(db, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "ResultCode": 0,
+        "ResultDesc": "Accepted" if processed else "Callback received for reconciliation",
+    }
 
 
 def _sale_query_for_shop(shop_id: int):
