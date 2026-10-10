@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import require_cashier
+from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.models.shop import Shop
@@ -13,6 +13,7 @@ from app.schemas.sale import (
     ManualMpesaSaleCreate,
     ManualPaymentConfirm,
     MpesaSaleCreate,
+    MpesaReconciliationRead,
     SaleCreate,
     SaleRead,
 )
@@ -23,10 +24,13 @@ from app.services.mpesa import (
     ensure_mpesa_configured,
     normalize_phone_number,
     process_stk_callback,
+    query_stk_status,
     request_stk_push,
+    StkQueryStatus,
 )
 from app.services.sales import (
     SaleError,
+    apply_stk_reconciliation,
     confirm_manual_payment,
     complete_sale,
     create_pending_manual_sale,
@@ -205,6 +209,70 @@ def mpesa_callback(payload: dict, db: Session = Depends(get_db)):
     return {
         "ResultCode": 0,
         "ResultDesc": "Accepted" if processed else "Callback received for reconciliation",
+    }
+
+
+@router.post(
+    "/{sale_id}/mpesa/reconcile",
+    response_model=MpesaReconciliationRead,
+)
+def reconcile_mpesa_sale(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    sale = db.scalar(
+        _sale_query_for_shop(user.shop_id).where(Sale.id == sale_id)
+    )
+    if sale is None:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if sale.payment_method != PaymentMethod.MPESA:
+        raise HTTPException(status_code=409, detail="This sale is not an STK M-Pesa payment")
+    if sale.status != SaleStatus.PENDING:
+        outcome = sale.status.value
+        return {
+            "outcome": outcome,
+            "message": "This payment has already been resolved.",
+            "sale": sale,
+        }
+    if not sale.mpesa_checkout_request_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This payment has no Daraja checkout ID and requires manual review.",
+        )
+
+    try:
+        provider_status = query_stk_status(sale.mpesa_checkout_request_id)
+    except MpesaConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except MpesaRequestError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    try:
+        updated_sale = apply_stk_reconciliation(
+            db,
+            sale.id,
+            provider_status.value,
+            reconciled_by_user_id=user.id,
+        )
+    except SaleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    messages = {
+        StkQueryStatus.COMPLETED: "Daraja confirmed the payment.",
+        StkQueryStatus.FAILED: "Daraja confirmed the payment failed; reserved stock was released.",
+        StkQueryStatus.PENDING: "Daraja has no definitive result; the sale remains pending and stock stays reserved.",
+    }
+    outcome = updated_sale.status.value
+    message = (
+        messages[provider_status]
+        if outcome == provider_status.value
+        else "A callback resolved this payment while the status query was running."
+    )
+    return {
+        "outcome": outcome,
+        "message": message,
+        "sale": updated_sale,
     }
 
 

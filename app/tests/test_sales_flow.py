@@ -1,5 +1,8 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from threading import Barrier, BrokenBarrierError, Thread
+
+from sqlalchemy.orm import sessionmaker
 
 from tests.conftest import auth_headers
 
@@ -95,6 +98,96 @@ def test_sale_deducts_stock(client, db, admin_token, cashier_token, cashier_user
     assert updated["quantity"] == 700  # 1000 - 300
 
 
+def test_report_profit_uses_sale_time_cost_snapshot(
+    client, db, admin_token, cashier_token, cashier_user
+):
+    from app.models.sale import Sale
+    from app.models.variant import Variant
+
+    variant_data = _create_bulk_variant(client, admin_token, quantity=1000)
+    _open_session(db, cashier_user, Decimal("500.00"))
+    sale_response = client.post(
+        "/sales",
+        json={
+            "items": [{"variant_id": variant_data["id"], "quantity": 100}],
+            "amount_received": 20,
+        },
+        headers=auth_headers(cashier_token),
+    )
+    assert sale_response.status_code == 201, sale_response.text
+    assert Decimal(str(sale_response.json()["items"][0]["unit_cost_at_sale"])) == Decimal("0.12")
+
+    variant = db.get(Variant, variant_data["id"])
+    variant.cost_price = Decimal("0.50")
+    db.commit()
+
+    report_response = client.get(
+        f"/reports/summary?start_date={date.today()}&end_date={date.today()}",
+        headers=auth_headers(admin_token),
+    )
+    assert report_response.status_code == 200, report_response.text
+    assert report_response.json()["estimated_profit"] == 2.0
+
+    sale = db.get(Sale, sale_response.json()["id"])
+    db.refresh(sale)
+    assert sale.items[0].unit_cost_at_sale == Decimal("0.12")
+
+
+def test_concurrent_cash_sales_cannot_oversell(
+    client, db, admin_token, cashier_user, monkeypatch
+):
+    from app.models.variant import Variant
+    from app.services import sales
+    from app.services.sales import SaleError, complete_sale
+
+    variant = _create_bulk_variant(client, admin_token, quantity=10)
+    write_barrier = Barrier(2)
+    apply_stock_change = sales.apply_stock_change
+
+    def synchronize_stock_write(*args, **kwargs):
+        try:
+            write_barrier.wait(timeout=0.5)
+        except BrokenBarrierError:
+            pass
+        return apply_stock_change(*args, **kwargs)
+
+    monkeypatch.setattr(sales, "apply_stock_change", synchronize_stock_write)
+    session_factory = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False)
+    outcomes = []
+
+    def checkout():
+        session = session_factory()
+        try:
+            sale = complete_sale(
+                session,
+                shop_id=cashier_user.shop_id,
+                cashier_id=cashier_user.id,
+                items=[{"variant_id": variant["id"], "quantity": 6}],
+                amount_received=Decimal("1.00"),
+            )
+            outcomes.append(("completed", sale.id))
+        except SaleError as error:
+            outcomes.append(("rejected", str(error)))
+        except Exception as error:
+            outcomes.append(("error", error))
+        finally:
+            session.close()
+
+    checkouts = [Thread(target=checkout), Thread(target=checkout)]
+    for thread in checkouts:
+        thread.start()
+    for thread in checkouts:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in checkouts)
+    assert sorted(status for status, _ in outcomes) == ["completed", "rejected"]
+    assert all(status != "error" for status, _ in outcomes), outcomes
+
+    updated_variant = db.get(Variant, variant["id"])
+    db.refresh(updated_variant)
+    assert updated_variant.quantity == 4
+
+
 def test_mpesa_stk_uses_server_total_and_completes_only_on_matching_callback(
     client, db, admin_token, cashier_token, cashier_user, monkeypatch
 ):
@@ -171,6 +264,104 @@ def test_failed_mpesa_callback_releases_reserved_stock(
     assert detail.json()["status"] == "failed"
     db.refresh(variant)
     assert variant.quantity == 500
+
+
+def test_stk_reconciliation_completes_payment_from_daraja_status(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    from app.models.activity_log import ActivityAction, ActivityLog
+    from app.services.mpesa import StkQueryStatus
+
+    response, _, variant = _start_mpesa_sale(
+        client, db, admin_token, cashier_token, cashier_user, monkeypatch
+    )
+    sale_id = response.json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.sales.query_stk_status",
+        lambda checkout_request_id: StkQueryStatus.COMPLETED,
+    )
+
+    result = client.post(
+        f"/sales/{sale_id}/mpesa/reconcile",
+        headers=auth_headers(admin_token),
+    )
+
+    assert result.status_code == 200, result.text
+    assert result.json()["outcome"] == "completed"
+    assert result.json()["sale"]["status"] == "completed"
+    assert result.json()["sale"]["amount_received"] == 14.0
+    db.refresh(variant)
+    assert variant.quantity == 400
+    assert db.query(ActivityLog).filter(
+        ActivityLog.entity_id == sale_id,
+        ActivityLog.action == ActivityAction.SALE_COMPLETED,
+    ).count() == 1
+
+
+def test_stk_reconciliation_releases_stock_only_on_definitive_failure(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    from app.models.activity_log import ActivityAction, ActivityLog
+    from app.services.mpesa import StkQueryStatus
+    from app.models.variant import Variant
+
+    response, _, variant = _start_mpesa_sale(
+        client, db, admin_token, cashier_token, cashier_user, monkeypatch
+    )
+    sale_id = response.json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.sales.query_stk_status",
+        lambda checkout_request_id: StkQueryStatus.FAILED,
+    )
+
+    result = client.post(
+        f"/sales/{sale_id}/mpesa/reconcile",
+        headers=auth_headers(admin_token),
+    )
+
+    assert result.status_code == 200, result.text
+    assert result.json()["outcome"] == "failed"
+    assert result.json()["sale"]["status"] == "failed"
+    db.refresh(variant)
+    assert variant.quantity == 500
+    assert db.query(ActivityLog).filter(
+        ActivityLog.entity_id == sale_id,
+        ActivityLog.action == ActivityAction.SALE_PAYMENT_FAILED,
+    ).count() == 1
+    assert db.get(Variant, variant.id).quantity == 500
+
+
+def test_indeterminate_stk_reconciliation_keeps_stock_reserved(
+    client, db, admin_token, cashier_token, cashier_user, monkeypatch
+):
+    from app.services.mpesa import StkQueryStatus
+
+    response, _, variant = _start_mpesa_sale(
+        client, db, admin_token, cashier_token, cashier_user, monkeypatch
+    )
+    sale_id = response.json()["id"]
+    monkeypatch.setattr(
+        "app.api.routes.sales.query_stk_status",
+        lambda checkout_request_id: StkQueryStatus.PENDING,
+    )
+
+    forbidden = client.post(
+        f"/sales/{sale_id}/mpesa/reconcile",
+        headers=auth_headers(cashier_token),
+    )
+    assert forbidden.status_code == 403
+
+    result = client.post(
+        f"/sales/{sale_id}/mpesa/reconcile",
+        headers=auth_headers(admin_token),
+    )
+
+    assert result.status_code == 200, result.text
+    assert result.json()["outcome"] == "pending"
+    assert result.json()["sale"]["status"] == "pending"
+    assert "stays reserved" in result.json()["message"]
+    db.refresh(variant)
+    assert variant.quantity == 400
 
 
 def test_mpesa_fractional_total_is_rejected_without_stock_change(

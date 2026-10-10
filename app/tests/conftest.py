@@ -1,15 +1,40 @@
-import pytest  # pyright: ignore[reportMissingImports]
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from fastapi.testclient import TestClient
+import os
 
+import pytest  # pyright: ignore[reportMissingImports]
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, make_url
+from sqlalchemy.orm import sessionmaker
+
+from app.core.config import settings
 from app.core.database import Base, get_db
 from app.core.security import hash_password
 from app.main import app
 from app.models.shop import Shop
 from app.models.user import User, UserRole
 
-TEST_DATABASE_URL = "postgresql+psycopg://retail_user:change_me@localhost:5432/retail_test_db"
+if settings.ENVIRONMENT.lower() != "test":
+    raise RuntimeError("Set ENVIRONMENT=test before running pytest.")
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", settings.TEST_DATABASE_URL
+).strip()
+if not TEST_DATABASE_URL:
+    raise RuntimeError(
+        "Set TEST_DATABASE_URL to a dedicated disposable PostgreSQL test database "
+        "before running pytest."
+    )
+test_url = make_url(TEST_DATABASE_URL)
+app_url = make_url(settings.DATABASE_URL)
+if (
+    test_url.host,
+    test_url.port,
+    test_url.database,
+) == (
+    app_url.host,
+    app_url.port,
+    app_url.database,
+):
+    raise RuntimeError("TEST_DATABASE_URL must not point to DATABASE_URL.")
 
 engine = create_engine(TEST_DATABASE_URL)
 TestSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -23,7 +48,7 @@ def db():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=engine)  # full reset after every single test
+        Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture()
@@ -38,17 +63,20 @@ def client(db):
 
 @pytest.fixture()
 def shop(db):
-    s = Shop(name="Test Duka", currency="KES")
-    db.add(s)
+    shop = Shop(name="Test Duka", currency="KES")
+    db.add(shop)
     db.commit()
-    db.refresh(s)
-    return s
+    db.refresh(shop)
+    return shop
 
 
-def _make_user(db, shop, username, role, password="password123"):
+def _make_user(db, shop, username, role, password="test-password"):
     user = User(
-        shop_id=shop.id, full_name=username.title(), username=username,
-        password_hash=hash_password(password), role=role,
+        shop_id=shop.id,
+        full_name=username.title(),
+        username=username,
+        password_hash=hash_password(password),
+        role=role,
     )
     db.add(user)
     db.commit()
@@ -58,28 +86,31 @@ def _make_user(db, shop, username, role, password="password123"):
 
 @pytest.fixture()
 def admin_user(db, shop):
-    return _make_user(db, shop, "admin", UserRole.ADMIN)
+    return _make_user(db, shop, "admin", UserRole.ADMIN, "adminpass")
 
 
 @pytest.fixture()
 def cashier_user(db, shop):
-    return _make_user(db, shop, "cashier1", UserRole.CASHIER)
+    return _make_user(db, shop, "cashier1", UserRole.CASHIER, "cashierpass")
 
 
-def _login(client, username, password="password123"):
-    resp = client.post("/auth/login", data={"username": username, "password": password})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
+def _login(client, username, password="test-password"):
+    response = client.post(
+        "/auth/login",
+        data={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["access_token"]
 
 
 @pytest.fixture()
 def admin_token(client, admin_user):
-    return _login(client, admin_user.username)
+    return _login(client, admin_user.username, "adminpass")
 
 
 @pytest.fixture()
 def cashier_token(client, cashier_user):
-    return _login(client, cashier_user.username)
+    return _login(client, cashier_user.username, "cashierpass")
 
 
 def auth_headers(token):

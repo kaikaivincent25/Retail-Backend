@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
@@ -28,28 +28,41 @@ def complete_sale(
     try:
         if payment_method != PaymentMethod.CASH:
             raise SaleError("M-Pesa payments must use the STK Push checkout flow")
-        # 1. Validate every variant up front, and check stock, before writing anything
+        # Lock variants in a stable order so concurrent checkouts cannot oversell.
+        variant_ids = {entry["variant_id"] for entry in items}
+        variants = db.scalars(
+            select(Variant)
+            .join(Product)
+            .where(
+                Variant.id.in_(variant_ids),
+                Product.shop_id == shop_id,
+                Variant.is_active.is_(True),
+            )
+            .order_by(Variant.id)
+            .with_for_update(of=Variant)
+        ).all()
+        variants_by_id = {variant.id: variant for variant in variants}
+
+        # Validate every variant and the total requested quantity before writing.
         resolved: list[tuple[Variant, int]] = []
         subtotal = Decimal("0.00")
+        requested_by_variant: dict[int, int] = {}
 
         for entry in items:
-            variant = db.scalar(
-                select(Variant)
-                .join(Product)
-                .where(
-                    Variant.id == entry["variant_id"],
-                    Product.shop_id == shop_id,
-                    Variant.is_active.is_(True),
-                )
-            )
+            variant_id = entry["variant_id"]
+            variant = variants_by_id.get(variant_id)
             if variant is None:
-                raise SaleError(f"Variant {entry['variant_id']} not found or inactive")
+                raise SaleError(f"Variant {variant_id} not found or inactive")
 
             quantity = entry["quantity"]
-            if variant.quantity < quantity:
+            requested_by_variant[variant_id] = (
+                requested_by_variant.get(variant_id, 0) + quantity
+            )
+            if variant.quantity < requested_by_variant[variant_id]:
                 raise SaleError(
                     f"Insufficient stock for '{variant.name}': "
-                    f"have {variant.quantity}, requested {quantity}"
+                    f"have {variant.quantity}, "
+                    f"requested {requested_by_variant[variant_id]}"
                 )
 
             subtotal += variant.selling_price * quantity
@@ -84,6 +97,7 @@ def complete_sale(
                 variant_name=variant.name,
                 quantity=quantity,
                 unit_price=variant.selling_price,
+                unit_cost_at_sale=variant.cost_price,
                 line_total=line_total,
             ))
 
@@ -176,6 +190,7 @@ def create_pending_mpesa_sale(
                     variant_name=variant.name,
                     quantity=quantity,
                     unit_price=variant.selling_price,
+                    unit_cost_at_sale=variant.cost_price,
                     line_total=variant.selling_price * quantity,
                 )
             )
@@ -258,6 +273,7 @@ def create_pending_manual_sale(
                     variant_name=variant.name,
                     quantity=quantity,
                     unit_price=variant.selling_price,
+                    unit_cost_at_sale=variant.cost_price,
                     line_total=variant.selling_price * quantity,
                 )
             )
@@ -305,7 +321,12 @@ def confirm_manual_payment(
     return sale
 
 
-def release_pending_sale(db: Session, sale_id: int) -> Sale | None:
+def release_pending_sale(
+    db: Session,
+    sale_id: int,
+    *,
+    released_by_user_id: int | None = None,
+) -> Sale | None:
     sale = db.scalar(select(Sale).where(Sale.id == sale_id).with_for_update())
     if sale is None or sale.status != SaleStatus.PENDING:
         return sale
@@ -335,6 +356,64 @@ def release_pending_sale(db: Session, sale_id: int) -> Sale | None:
         )
 
     sale.status = SaleStatus.FAILED
+    log_activity(
+        db,
+        user_id=released_by_user_id or sale.cashier_id,
+        action=ActivityAction.SALE_PAYMENT_FAILED,
+        entity_type="sale",
+        entity_id=sale.id,
+        description=(
+            f"Manual M-Pesa payment cancelled for sale #{sale.id}"
+            if is_manual
+            else f"M-Pesa payment failed for sale #{sale.id}"
+        ),
+    )
     db.commit()
     db.refresh(sale)
     return sale
+
+
+def apply_stk_reconciliation(
+    db: Session,
+    sale_id: int,
+    status: str,
+    reconciled_by_user_id: int,
+) -> Sale:
+    try:
+        sale = db.scalar(
+            select(Sale)
+            .where(Sale.id == sale_id)
+            .options(selectinload(Sale.items))
+            .with_for_update()
+        )
+        if sale is None:
+            raise SaleError("Sale not found")
+        if sale.payment_method != PaymentMethod.MPESA:
+            raise SaleError("This sale is not an STK M-Pesa payment")
+        if sale.status != SaleStatus.PENDING:
+            return sale
+
+        if status == "completed":
+            sale.status = SaleStatus.COMPLETED
+            sale.amount_received = sale.total
+            sale.change = Decimal("0.00")
+            log_activity(
+                db,
+                user_id=reconciled_by_user_id,
+                action=ActivityAction.SALE_COMPLETED,
+                entity_type="sale",
+                entity_id=sale.id,
+                description=f"M-Pesa sale #{sale.id} confirmed by Daraja status query",
+            )
+            db.commit()
+            db.refresh(sale)
+        elif status == "failed":
+            sale = release_pending_sale(
+                db,
+                sale.id,
+                released_by_user_id=reconciled_by_user_id,
+            )
+        return sale
+    except Exception:
+        db.rollback()
+        raise

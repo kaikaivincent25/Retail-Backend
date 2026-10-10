@@ -147,7 +147,8 @@ def main():
 
                 db.add(SaleItem(
                     sale_id=sale.id, variant_id=variant.id, variant_name=variant.name,
-                    quantity=qty, unit_price=variant.selling_price, line_total=line_total,
+                    quantity=qty, unit_price=variant.selling_price,
+                    unit_cost_at_sale=variant.cost_price, line_total=line_total,
                 ))
                 db.add(StockMovement(
                     variant_id=variant.id, movement_type=MovementType.SALE,

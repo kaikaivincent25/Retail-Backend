@@ -73,6 +73,7 @@ class SaleItem(TimestampMixin, Base):
     variant_name: Mapped[str] = mapped_column(String(100), nullable=False)
     quantity: Mapped[int] = mapped_column(nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    unit_cost_at_sale: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     line_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
     sale: Mapped[Sale] = relationship(back_populates="items")

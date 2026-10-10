@@ -11,6 +11,7 @@ from app.models.user import User
 class ActivityAction(str, enum.Enum):
     LOGIN = "login"
     SALE_COMPLETED = "sale_completed"
+    SALE_PAYMENT_FAILED = "sale_payment_failed"
     SALE_VOIDED = "sale_voided"                # not triggerable yet — no void endpoint exists
     CART_CLEARED = "cart_cleared"               # frontend-only event, wired in Phase 22/23
     INVENTORY_ADJUSTED = "inventory_adjusted"

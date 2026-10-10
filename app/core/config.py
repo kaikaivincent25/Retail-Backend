@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "Duka Retail System"
     ENVIRONMENT: str = "development"
     DATABASE_URL: str
+    TEST_DATABASE_URL: str = ""
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"

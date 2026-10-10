@@ -55,9 +55,8 @@ def summarize_period(db: Session, shop_id: int, start: date, end: date) -> dict:
     ) or Decimal("0.00")
 
     profit_query = (
-        select(func.sum((SaleItem.unit_price - Variant.cost_price) * SaleItem.quantity))
+        select(func.sum((SaleItem.unit_price - SaleItem.unit_cost_at_sale) * SaleItem.quantity))
         .join(Sale, Sale.id == SaleItem.sale_id)
-        .join(Variant, Variant.id == SaleItem.variant_id)
         .where(
             Sale.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start_dt, Sale.created_at <= end_dt,

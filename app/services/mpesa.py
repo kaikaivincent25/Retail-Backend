@@ -1,4 +1,5 @@
 import base64
+import enum
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,12 @@ class MpesaRequestError(Exception):
     def __init__(self, message: str, *, definitive_rejection: bool = False):
         super().__init__(message)
         self.definitive_rejection = definitive_rejection
+
+
+class StkQueryStatus(str, enum.Enum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PENDING = "pending"
 
 
 def normalize_phone_number(phone_number: str) -> str:
@@ -144,6 +151,56 @@ def request_stk_push(sale_id: int, amount: Decimal, phone_number: str) -> dict[s
         "checkout_request_id": str(checkout_request_id),
         "merchant_request_id": str(merchant_request_id),
     }
+
+
+def query_stk_status(checkout_request_id: str) -> StkQueryStatus:
+    key, secret, shortcode, passkey, _ = _required_settings()
+    base_url = settings.MPESA_BASE_URL.rstrip("/")
+    timestamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(
+        f"{shortcode}{passkey}{timestamp}".encode("utf-8")
+    ).decode("ascii")
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            token = _access_token(client, base_url, key, secret)
+            response = client.post(
+                f"{base_url}/mpesa/stkpushquery/v1/query",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "BusinessShortCode": shortcode,
+                    "Password": password,
+                    "Timestamp": timestamp,
+                    "CheckoutRequestID": checkout_request_id,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+    except MpesaRequestError:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise MpesaRequestError(
+            "Could not reconcile this payment with Safaricom Daraja."
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise MpesaRequestError("Safaricom Daraja returned an invalid query response.")
+    if str(result.get("ResponseCode")) != "0":
+        raise MpesaRequestError(
+            "Safaricom Daraja did not accept the payment-status query."
+        )
+    returned_checkout_id = result.get("CheckoutRequestID")
+    if returned_checkout_id and str(returned_checkout_id) != checkout_request_id:
+        raise MpesaRequestError(
+            "Safaricom Daraja returned a status for a different checkout request."
+        )
+
+    result_code = str(result.get("ResultCode", ""))
+    if result_code == "0":
+        return StkQueryStatus.COMPLETED
+    if result_code in {"1", "1032", "2001"}:
+        return StkQueryStatus.FAILED
+    return StkQueryStatus.PENDING
 
 
 def process_stk_callback(db: Session, payload: dict[str, Any]) -> bool:

@@ -1,5 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.sale import PaymentMethod, SaleStatus
@@ -74,6 +76,7 @@ class SaleItemRead(BaseModel):
     variant_name: str
     quantity: int
     unit_price: Decimal
+    unit_cost_at_sale: Decimal
     line_total: Decimal
 
 
@@ -96,3 +99,9 @@ class SaleRead(BaseModel):
     payment_account_number: str | None = None
     items: list[SaleItemRead]
     created_at: datetime
+
+
+class MpesaReconciliationRead(BaseModel):
+    outcome: Literal["completed", "failed", "pending", "voided"]
+    message: str
+    sale: SaleRead
