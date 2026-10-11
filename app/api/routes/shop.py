@@ -6,7 +6,12 @@ from app.api.deps import require_admin, require_cashier
 from app.core.database import get_db
 from app.models.shop import Shop
 from app.models.user import User
-from app.schemas.shop import PaymentDestinationRead, ShopRead, ShopUpdate
+from app.schemas.shop import (
+    PaymentDestinationRead,
+    ShopRead,
+    ShopReceiptRead,
+    ShopUpdate,
+)
 
 router = APIRouter(prefix="/shop", tags=["Shop"])
 
@@ -20,6 +25,14 @@ PAYMENT_DESTINATION_FIELDS = {
 
 @router.get("", response_model=ShopRead)
 def get_shop(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return db.get(Shop, user.shop_id)
+
+
+@router.get("/receipt-profile", response_model=ShopReceiptRead)
+def get_receipt_profile(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
     return db.get(Shop, user.shop_id)
 
 

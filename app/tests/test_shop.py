@@ -56,3 +56,12 @@ def test_cashier_cannot_access_shop_settings(client, cashier_token):
     response = client.get("/shop", headers=auth_headers(cashier_token))
 
     assert response.status_code == 403
+
+
+def test_cashier_can_get_receipt_profile(client, cashier_token, shop):
+    response = client.get(
+        "/shop/receipt-profile", headers=auth_headers(cashier_token)
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"name": shop.name, "location": shop.location}

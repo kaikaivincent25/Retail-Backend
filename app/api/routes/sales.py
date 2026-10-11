@@ -14,6 +14,7 @@ from app.schemas.sale import (
     ManualPaymentConfirm,
     MpesaSaleCreate,
     MpesaReconciliationRead,
+    SaleDetailRead,
     SaleCreate,
     SaleRead,
 )
@@ -326,7 +327,7 @@ def sales_today(
     return db.scalars(query).all()
 
 
-@router.get("/{sale_id}", response_model=SaleRead)
+@router.get("/{sale_id}", response_model=SaleDetailRead)
 def get_sale(
     sale_id: int,
     db: Session = Depends(get_db),
@@ -340,4 +341,7 @@ def get_sale(
     if user.role.value == "cashier" and sale.cashier_id != user.id:
         raise HTTPException(status_code=404, detail="Sale not found")  # 404, not 403 — don't leak existence
 
-    return sale
+    return {
+        **SaleRead.model_validate(sale).model_dump(),
+        "cashier_name": sale.cashier.full_name,
+    }

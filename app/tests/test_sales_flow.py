@@ -230,6 +230,7 @@ def test_mpesa_stk_uses_server_total_and_completes_only_on_matching_callback(
     assert detail.json()["status"] == "completed"
     assert detail.json()["amount_received"] == 14.0
     assert detail.json()["mpesa_receipt_number"] == "QGH123ABC"
+    assert detail.json()["cashier_name"] == cashier_user.full_name
     db.refresh(variant)
     assert variant.quantity == 400
 

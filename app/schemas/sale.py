@@ -101,6 +101,10 @@ class SaleRead(BaseModel):
     created_at: datetime
 
 
+class SaleDetailRead(SaleRead):
+    cashier_name: str
+
+
 class MpesaReconciliationRead(BaseModel):
     outcome: Literal["completed", "failed", "pending", "voided"]
     message: str

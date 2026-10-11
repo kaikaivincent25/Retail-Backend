@@ -21,6 +21,13 @@ class ShopRead(BaseModel):
     mpesa_paybill_account_number: str | None
 
 
+class ShopReceiptRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    location: str | None
+
+
 class PaymentDestinationRead(BaseModel):
     method: str
     label: str
