@@ -49,6 +49,7 @@ def complete_sale(
         resolved: list[tuple[Variant, int]] = []
         subtotal = Decimal("0.00")
         requested_by_variant: dict[int, int] = {}
+        stock_before_by_variant: dict[int, int] = {}
 
         for entry in items:
             variant_id = entry["variant_id"]
@@ -60,12 +61,7 @@ def complete_sale(
             requested_by_variant[variant_id] = (
                 requested_by_variant.get(variant_id, 0) + quantity
             )
-            if variant.quantity < requested_by_variant[variant_id]:
-                raise SaleError(
-                    f"Insufficient stock for '{variant.name}': "
-                    f"have {variant.quantity}, "
-                    f"requested {requested_by_variant[variant_id]}"
-                )
+            stock_before_by_variant[variant_id] = variant.quantity
 
             subtotal += variant.selling_price * quantity
             resolved.append((variant, quantity))
@@ -104,14 +100,33 @@ def complete_sale(
                 line_total=line_total,
             ))
 
-            apply_stock_change(
-                db,
-                variant,
-                delta=-quantity,
-                movement_type=MovementType.SALE,
-                user_id=cashier_id,
-                reason=f"Sale #{sale.id}",
-            )
+            deducted_quantity = min(quantity, variant.quantity)
+            if deducted_quantity:
+                apply_stock_change(
+                    db,
+                    variant,
+                    delta=-deducted_quantity,
+                    movement_type=MovementType.SALE,
+                    user_id=cashier_id,
+                    reason=f"Sale #{sale.id}",
+                )
+
+        for variant_id, requested_quantity in requested_by_variant.items():
+            stock_before = stock_before_by_variant[variant_id]
+            shortfall = max(requested_quantity - stock_before, 0)
+            if shortfall:
+                variant = variants_by_id[variant_id]
+                log_activity(
+                    db,
+                    user_id=cashier_id,
+                    action=ActivityAction.SALE_COMPLETED,
+                    entity_type="sale_stock_conflict",
+                    entity_id=sale.id,
+                    description=(
+                        f"STOCK_CONFLICT: {variant.name}, sold {requested_quantity}, "
+                        f"had {stock_before}, shortfall {shortfall}"
+                    )[:255],
+                )
         log_activity(
             db, user_id=cashier_id, action=ActivityAction.SALE_COMPLETED,
             entity_type="sale", entity_id=sale.id,

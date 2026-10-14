@@ -1,9 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from threading import Barrier, BrokenBarrierError, Thread
 from uuid import uuid4
-
-from sqlalchemy.orm import sessionmaker
 
 from tests.conftest import auth_headers
 
@@ -176,59 +173,39 @@ def test_report_profit_uses_sale_time_cost_snapshot(
     assert sale.items[0].unit_cost_at_sale == Decimal("0.12")
 
 
-def test_concurrent_cash_sales_cannot_oversell(
-    client, db, admin_token, cashier_user, monkeypatch
+def test_cash_sales_record_stock_conflicts_without_overselling_stock(
+    client, db, admin_token, cashier_user
 ):
+    from app.models.activity_log import ActivityLog
     from app.models.variant import Variant
-    from app.services import sales
-    from app.services.sales import SaleError, complete_sale
+    from app.services.sales import complete_sale
 
     variant = _create_bulk_variant(client, admin_token, quantity=10)
-    write_barrier = Barrier(2)
-    apply_stock_change = sales.apply_stock_change
-
-    def synchronize_stock_write(*args, **kwargs):
-        try:
-            write_barrier.wait(timeout=0.5)
-        except BrokenBarrierError:
-            pass
-        return apply_stock_change(*args, **kwargs)
-
-    monkeypatch.setattr(sales, "apply_stock_change", synchronize_stock_write)
-    session_factory = sessionmaker(bind=db.get_bind(), autoflush=False, autocommit=False)
-    outcomes = []
-
-    def checkout():
-        session = session_factory()
-        try:
-            sale = complete_sale(
-                session,
-                shop_id=cashier_user.shop_id,
-                cashier_id=cashier_user.id,
-                items=[{"variant_id": variant["id"], "quantity": 6}],
-                amount_received=Decimal("1.00"),
-            )
-            outcomes.append(("completed", sale.id))
-        except SaleError as error:
-            outcomes.append(("rejected", str(error)))
-        except Exception as error:
-            outcomes.append(("error", error))
-        finally:
-            session.close()
-
-    checkouts = [Thread(target=checkout), Thread(target=checkout)]
-    for thread in checkouts:
-        thread.start()
-    for thread in checkouts:
-        thread.join(timeout=5)
-
-    assert all(not thread.is_alive() for thread in checkouts)
-    assert sorted(status for status, _ in outcomes) == ["completed", "rejected"]
-    assert all(status != "error" for status, _ in outcomes), outcomes
+    items = [{"variant_id": variant["id"], "quantity": 6}]
+    first_sale = complete_sale(
+        db,
+        shop_id=cashier_user.shop_id,
+        cashier_id=cashier_user.id,
+        items=items,
+        amount_received=Decimal("1.00"),
+    )
+    second_sale = complete_sale(
+        db,
+        shop_id=cashier_user.shop_id,
+        cashier_id=cashier_user.id,
+        items=items,
+        amount_received=Decimal("1.00"),
+    )
 
     updated_variant = db.get(Variant, variant["id"])
     db.refresh(updated_variant)
-    assert updated_variant.quantity == 4
+    assert updated_variant.quantity == 0
+    conflict = db.query(ActivityLog).filter_by(
+        entity_type="sale_stock_conflict",
+        entity_id=second_sale.id,
+    ).one()
+    assert conflict.description == "STOCK_CONFLICT: Bulk, sold 6, had 4, shortfall 2"
+    assert first_sale.id != second_sale.id
 
 
 def test_mpesa_stk_uses_server_total_and_completes_only_on_matching_callback(
