@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -24,6 +25,7 @@ def complete_sale(
     amount_received: Decimal,
     payment_method: PaymentMethod = PaymentMethod.CASH,
     session_id: int | None = None,
+    client_id: UUID | None = None,
 ) -> Sale:
     try:
         if payment_method != PaymentMethod.CASH:
@@ -79,6 +81,7 @@ def complete_sale(
         sale = Sale(
             shop_id=shop_id,
             cashier_id=cashier_id,
+            client_id=client_id,
             session_id=session_id,
             subtotal=subtotal,
             total=total,

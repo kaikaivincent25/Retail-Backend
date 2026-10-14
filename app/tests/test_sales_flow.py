@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from threading import Barrier, BrokenBarrierError, Thread
+from uuid import uuid4
 
 from sqlalchemy.orm import sessionmaker
 
@@ -96,6 +97,48 @@ def test_sale_deducts_stock(client, db, admin_token, cashier_token, cashier_user
     stock_resp = client.get("/inventory", headers=auth_headers(cashier_token))
     updated = next(v for v in stock_resp.json() if v["id"] == variant["id"])
     assert updated["quantity"] == 700  # 1000 - 300
+
+
+def test_retried_sale_with_same_client_id_is_created_once(
+    client, db, admin_token, cashier_token, cashier_user
+):
+    from app.models.sale import Sale
+    from app.models.variant import Variant
+
+    variant_data = _create_bulk_variant(client, admin_token, quantity=1000)
+    _open_session(db, cashier_user, Decimal("500.00"))
+    client_id = str(uuid4())
+    payload = {
+        "items": [{"variant_id": variant_data["id"], "quantity": 300}],
+        "amount_received": 100,
+        "client_id": client_id,
+    }
+
+    first_response = client.post(
+        "/sales",
+        json=payload,
+        headers=auth_headers(cashier_token),
+    )
+    assert first_response.status_code == 201, first_response.text
+
+    retry_payload = {
+        **payload,
+        "items": [{"variant_id": variant_data["id"], "quantity": 1}],
+        "amount_received": 1,
+    }
+    retry_response = client.post(
+        "/sales",
+        json=retry_payload,
+        headers=auth_headers(cashier_token),
+    )
+    assert retry_response.status_code == 201, retry_response.text
+    assert retry_response.json()["id"] == first_response.json()["id"]
+
+    sale_count = db.query(Sale).filter_by(shop_id=cashier_user.shop_id, client_id=client_id).count()
+    assert sale_count == 1
+    variant = db.get(Variant, variant_data["id"])
+    db.refresh(variant)
+    assert variant.quantity == 700
 
 
 def test_report_profit_uses_sale_time_cost_snapshot(

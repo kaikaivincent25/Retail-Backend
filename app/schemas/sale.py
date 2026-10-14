@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -16,6 +17,7 @@ class SaleCreate(BaseModel):
     items: list[SaleItemIn] = Field(..., min_length=1)
     amount_received: Decimal = Field(..., ge=0)
     payment_method: PaymentMethod = PaymentMethod.CASH
+    client_id: UUID | None = None
 
     @model_validator(mode="after")
     def no_duplicate_variants(self):
@@ -86,6 +88,7 @@ class SaleRead(BaseModel):
     id: int
     shop_id: int
     cashier_id: int
+    client_id: UUID | None = None
     session_id: int | None
     subtotal: Decimal
     total: Decimal

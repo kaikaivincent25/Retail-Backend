@@ -1,7 +1,9 @@
 from datetime import date, date as date_type, datetime, time, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_cashier, require_manager
@@ -42,12 +44,25 @@ from app.services.sales import (
 router = APIRouter(prefix="/sales", tags=["Sales"])
 
 
+def _find_sale_by_client_id(db: Session, shop_id: int, client_id: UUID) -> Sale | None:
+    return db.scalar(
+        select(Sale)
+        .options(selectinload(Sale.items))
+        .where(Sale.shop_id == shop_id, Sale.client_id == client_id)
+    )
+
+
 @router.post("", response_model=SaleRead, status_code=201)
 def create_sale(
     payload: SaleCreate,
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
+    if payload.client_id is not None:
+        existing = _find_sale_by_client_id(db, user.shop_id, payload.client_id)
+        if existing is not None:
+            return existing
+
     session = get_open_session(db, user.shop_id, lock=True)
     if session is None:
         raise HTTPException(
@@ -64,7 +79,16 @@ def create_sale(
             amount_received=payload.amount_received,
             payment_method=payload.payment_method,
             session_id=session.id,
+            client_id=payload.client_id,
         )
+    except IntegrityError as exc:
+        constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint_name != "uq_sales_shop_client_id" or payload.client_id is None:
+            raise
+        existing = _find_sale_by_client_id(db, user.shop_id, payload.client_id)
+        if existing is not None:
+            return existing
+        raise
     except SaleError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

@@ -1,7 +1,9 @@
 import enum
 from decimal import Decimal
+from uuid import UUID
 
-from sqlalchemy import Enum, ForeignKey, Numeric, String
+from sqlalchemy import Enum, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -27,10 +29,14 @@ class SaleStatus(str, enum.Enum):
 
 class Sale(TimestampMixin, Base):
     __tablename__ = "sales"
+    __table_args__ = (
+        UniqueConstraint("shop_id", "client_id", name="uq_sales_shop_client_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     cashier_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    client_id: Mapped[UUID | None] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=True)
 
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
