@@ -8,17 +8,20 @@ from app.schemas.variant import VariantCreate, VariantRead
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
 Category = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+ImageUrl = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
 
 
 class ProductCreate(BaseModel):
     name: Name
     category: Category | None = None
+    image_url: ImageUrl | None = None
     variants: list[VariantCreate] = Field(default_factory=list)
 
 
 class ProductUpdate(BaseModel):
     name: Name | None = None
     category: Category | None = None
+    image_url: ImageUrl | None = None
     is_active: bool | None = None
 
 
@@ -29,6 +32,7 @@ class ProductRead(BaseModel):
     shop_id: int
     name: str
     category: str | None
+    image_url: str | None
     is_active: bool
 
 
@@ -41,6 +45,7 @@ class PopularVariant(BaseModel):
     variant_name: str
     product_id: int
     product_name: str
+    image_url: str | None = None
     unit: str
     sale_mode: str
     selling_price: Decimal
@@ -54,6 +59,7 @@ class VariantBrowseResult(BaseModel):
     variant_name: str
     product_id: int
     product_name: str
+    image_url: str | None = None
     unit: str
     sale_mode: str
     selling_price: float

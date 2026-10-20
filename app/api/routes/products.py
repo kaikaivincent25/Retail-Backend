@@ -111,6 +111,7 @@ def popular_products(
             Variant.name.label("variant_name"),
             Product.id.label("product_id"),
             Product.name.label("product_name"),
+            Product.image_url.label("image_url"),
             Variant.unit,
             Variant.sale_mode,
             Variant.selling_price,
@@ -164,6 +165,7 @@ def popular_products(
                 variant_name=r.variant_name,
                 product_id=r.product_id,
                 product_name=r.product_name,
+                image_url=r.image_url,
                 unit=r.unit.value,
                 sale_mode=r.sale_mode.value,
                 selling_price=r.selling_price,
@@ -224,7 +226,7 @@ def update_product(
     data = {
         k: v
         for k, v in payload.model_dump(exclude_unset=True).items()
-        if v is not None or k == "category"
+        if v is not None or k in {"category", "image_url"}
     }
 
     if "name" in data:
