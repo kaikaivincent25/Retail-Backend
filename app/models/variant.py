@@ -19,7 +19,20 @@ from app.models.product import Product
 
 class Unit(str, enum.Enum):
     PIECE = "piece"
+    EACH = "each"
     PACKET = "packet"
+    PACK = "pack"
+    PAIR = "pair"
+    SET = "set"
+    BOX = "box"
+    CASE = "case"
+    DOZEN = "dozen"
+    BOTTLE = "bottle"
+    CAN = "can"
+    SHEET = "sheet"
+    ROLL = "roll"
+    METRE = "metre"
+    CENTIMETRE = "centimetre"
     GRAM = "gram"
     KG = "kg"
     ML = "ml"
@@ -72,6 +85,7 @@ class Variant(TimestampMixin, Base):
     )
 
     sku: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
+    barcode: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
 
     product: Mapped[Product] = relationship()

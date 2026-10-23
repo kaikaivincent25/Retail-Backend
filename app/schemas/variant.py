@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from app.models.variant import SaleMode, Unit
 
@@ -16,6 +16,14 @@ class VariantCreate(BaseModel):
     selling_price: Decimal = Field(ge=0)
     cost_price: Decimal = Field(default=Decimal("0"), ge=0)
     sku: str | None = None
+    barcode: str | None = Field(default=None, max_length=64)
+
+    @field_validator("sku", "barcode", mode="before")
+    @classmethod
+    def normalize_identifiers(cls, value):
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
     @model_validator(mode="after")
     def bulk_unit_quantity_is_one(self):
@@ -44,5 +52,6 @@ class VariantRead(BaseModel):
     cost_price: Decimal
     cost_price_is_known: bool = False
     sku: str | None
+    barcode: str | None = None
     is_active: bool
 

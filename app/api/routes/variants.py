@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_, select
+from sqlalchemy import String, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_cashier, require_manager
@@ -64,6 +64,13 @@ def create_variant(
     if payload.sku and db.scalar(select(Variant).where(Variant.sku == payload.sku)):
         raise HTTPException(status_code=409, detail=f"SKU '{payload.sku}' already in use")
 
+    if payload.barcode and db.scalar(
+        select(Variant.id)
+        .join(Product)
+        .where(Product.shop_id == user.shop_id, Variant.barcode == payload.barcode)
+    ):
+        raise HTTPException(status_code=409, detail="Barcode is already in use in this shop")
+
     variant_data = payload.model_dump()
     variant_data["cost_price_is_known"] = "cost_price" in payload.model_fields_set
     variant = Variant(product_id=product_id, **variant_data)
@@ -109,6 +116,8 @@ def browse_variants(
             Variant.sale_mode,
             Variant.selling_price,
             Variant.quantity.label("quantity_in_stock"),
+            Variant.sku,
+            Variant.barcode,
         )
         .join(Product, Product.id == Variant.product_id)
         .where(
@@ -119,8 +128,18 @@ def browse_variants(
     )
 
     if q:
+        search = f"%{q.strip()}%"
         query = query.where(
-            or_(Variant.name.ilike(f"%{q}%"), Product.name.ilike(f"%{q}%"))
+            or_(
+                Variant.name.ilike(search),
+                Variant.sku.ilike(search),
+                Variant.barcode.ilike(search),
+                Product.name.ilike(search),
+                Product.category.ilike(search),
+                Product.brand.ilike(search),
+                Product.description.ilike(search),
+                Product.attributes.cast(String).ilike(search),
+            )
         )
 
     rows = db.execute(query.order_by(Product.name, Variant.name).limit(limit)).all()
@@ -158,6 +177,8 @@ def browse_variants(
                 unit=r.unit.value,
                 sale_mode=r.sale_mode.value,
                 selling_price=float(r.selling_price),
+                sku=r.sku,
+                barcode=r.barcode,
                 quantity_in_stock=int(r.quantity_in_stock),
                 presets=presets,
             )

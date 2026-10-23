@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import String, case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_cashier, require_manager
@@ -66,6 +66,21 @@ def create_product(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="One or more variant SKUs are already in use",
+        )
+
+    barcodes = [variant.barcode for variant in payload.variants if variant.barcode]
+    if len(barcodes) != len(set(barcodes)) or (
+        barcodes
+        and db.scalar(
+            select(Variant.id)
+            .join(Product)
+            .where(Product.shop_id == user.shop_id, Variant.barcode.in_(barcodes))
+            .limit(1)
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="One or more variant barcodes are already in use in this shop",
         )
 
     product = Product(
@@ -193,7 +208,21 @@ def list_products(
         query = query.where(Product.is_active.is_(True))
 
     if q:
-        query = query.where(Product.name.ilike(f"%{q}%"))
+        search = f"%{q.strip()}%"
+        matching_variant = select(Variant.id).where(
+            Variant.product_id == Product.id,
+            or_(Variant.sku.ilike(search), Variant.barcode.ilike(search)),
+        )
+        query = query.where(
+            or_(
+                Product.name.ilike(search),
+                Product.category.ilike(search),
+                Product.brand.ilike(search),
+                Product.description.ilike(search),
+                Product.attributes.cast(String).ilike(search),
+                matching_variant.exists(),
+            )
+        )
     if category:
         query = query.where(Product.category == category)
 
@@ -226,7 +255,7 @@ def update_product(
     data = {
         k: v
         for k, v in payload.model_dump(exclude_unset=True).items()
-        if v is not None or k in {"category", "image_url"}
+        if v is not None or k in {"category", "brand", "description", "attributes", "image_url"}
     }
 
     if "name" in data:
