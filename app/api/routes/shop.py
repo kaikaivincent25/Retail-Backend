@@ -1,15 +1,27 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin, require_cashier
 from app.core.database import get_db
 from app.models.shop import Shop
+from app.models.activity_log import ActivityLog
+from app.models.bulk_preset import BulkPreset
+from app.models.cash_deposit import CashDeposit
+from app.models.cash_session import CashSession
+from app.models.expense import Expense
+from app.models.product import Product
+from app.models.sale import Sale, SaleItem
+from app.models.stock_movement import StockMovement
 from app.models.user import User
+from app.models.variant import Variant
+from app.core.security import verify_password
 from app.schemas.shop import (
     PaymentDestinationRead,
     ShopRead,
     ShopReceiptRead,
+    ShopDeleteRequest,
     ShopUpdate,
 )
 
@@ -99,3 +111,48 @@ def update_shop(
     db.commit()
     db.refresh(shop)
     return shop
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def delete_shop(
+    payload: ShopDeleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+):
+    # Lock the tenant row while deleting to prevent two concurrent delete requests.
+    shop = db.scalar(select(Shop).where(Shop.id == user.shop_id).with_for_update())
+    if shop is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
+    if payload.shop_name != shop.name:
+        raise HTTPException(status_code=422, detail="Shop name confirmation does not match")
+
+    shop_users = select(User.id).where(User.shop_id == shop.id)
+    shop_sales = select(Sale.id).where(Sale.shop_id == shop.id)
+    shop_products = select(Product.id).where(Product.shop_id == shop.id)
+    shop_variants = select(Variant.id).where(Variant.product_id.in_(shop_products))
+
+    try:
+        # Remove dependent records first. All predicates are scoped to this tenant.
+        db.execute(delete(SaleItem).where(SaleItem.sale_id.in_(shop_sales)))
+        db.execute(delete(Sale).where(Sale.shop_id == shop.id))
+        db.execute(delete(CashDeposit).where(CashDeposit.shop_id == shop.id))
+        db.execute(delete(Expense).where(Expense.user_id.in_(shop_users)))
+        db.execute(delete(StockMovement).where(StockMovement.variant_id.in_(shop_variants)))
+        db.execute(delete(BulkPreset).where(BulkPreset.variant_id.in_(shop_variants)))
+        db.execute(delete(Variant).where(Variant.product_id.in_(shop_products)))
+        db.execute(delete(Product).where(Product.shop_id == shop.id))
+        db.execute(delete(CashSession).where(CashSession.shop_id == shop.id))
+        db.execute(delete(ActivityLog).where(ActivityLog.user_id.in_(shop_users)))
+        db.execute(delete(User).where(User.shop_id == shop.id))
+        db.delete(shop)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Shop data changed during deletion. No data was removed; please try again.",
+        ) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -56,3 +56,8 @@ class ShopUpdate(BaseModel):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+
+class ShopDeleteRequest(BaseModel):
+    shop_name: str = Field(..., min_length=2, max_length=150)
+    current_password: str = Field(..., min_length=1, max_length=100)
