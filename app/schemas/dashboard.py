@@ -21,6 +21,10 @@ class DashboardSummary(BaseModel):
     net_sales: Decimal
     transaction_count: int
     estimated_profit: Decimal
+    cost_of_goods_sold: Decimal = Decimal("0.00")
+    gross_profit: Decimal = Decimal("0.00")
+    cost_data_complete: bool = False
+    profit_status: str = "incomplete"
     low_stock_count: int
     top_products: list[TopProduct]
 

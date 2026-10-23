@@ -97,6 +97,7 @@ def complete_sale(
                 quantity=quantity,
                 unit_price=variant.selling_price,
                 unit_cost_at_sale=variant.cost_price,
+                cost_is_known_at_sale=variant.cost_price_is_known,
                 line_total=line_total,
             ))
 
@@ -109,6 +110,7 @@ def complete_sale(
                     movement_type=MovementType.SALE,
                     user_id=cashier_id,
                     reason=f"Sale #{sale.id}",
+                    unit_cost_at_time=variant.cost_price,
                 )
 
         for variant_id, requested_quantity in requested_by_variant.items():
@@ -209,6 +211,7 @@ def create_pending_mpesa_sale(
                     quantity=quantity,
                     unit_price=variant.selling_price,
                     unit_cost_at_sale=variant.cost_price,
+                    cost_is_known_at_sale=variant.cost_price_is_known,
                     line_total=variant.selling_price * quantity,
                 )
             )
@@ -292,6 +295,7 @@ def create_pending_manual_sale(
                     quantity=quantity,
                     unit_price=variant.selling_price,
                     unit_cost_at_sale=variant.cost_price,
+                    cost_is_known_at_sale=variant.cost_price_is_known,
                     line_total=variant.selling_price * quantity,
                 )
             )

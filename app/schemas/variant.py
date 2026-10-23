@@ -42,6 +42,7 @@ class VariantRead(BaseModel):
     unit_quantity: int
     selling_price: Decimal
     cost_price: Decimal
+    cost_price_is_known: bool = False
     sku: str | None
     is_active: bool
 

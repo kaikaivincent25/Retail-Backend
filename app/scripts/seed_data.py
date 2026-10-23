@@ -93,6 +93,7 @@ def main():
             variant = Variant(
                 product_id=product.id, name=name, unit=unit, sale_mode=sale_mode,
                 unit_quantity=unit_qty, selling_price=price, cost_price=cost,
+                cost_price_is_known=cost > 0,
                 quantity=opening_stock, reorder_level=max(int(opening_stock * 0.1), 5),
             )
             db.add(variant)
@@ -102,6 +103,7 @@ def main():
                 variant_id=variant.id, movement_type=MovementType.PURCHASE,
                 quantity=opening_stock, previous_quantity=0, new_quantity=opening_stock,
                 reason="Initial stock", user_id=admin.id,
+                unit_cost_at_time=cost,
             ))
             all_variants.append(variant)
 
@@ -149,6 +151,7 @@ def main():
                     sale_id=sale.id, variant_id=variant.id, variant_name=variant.name,
                     quantity=qty, unit_price=variant.selling_price,
                     unit_cost_at_sale=variant.cost_price, line_total=line_total,
+                    cost_is_known_at_sale=variant.cost_price > 0,
                 ))
                 db.add(StockMovement(
                     variant_id=variant.id, movement_type=MovementType.SALE,

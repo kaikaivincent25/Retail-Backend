@@ -2,6 +2,7 @@ import enum
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Enum,
     ForeignKey,
@@ -66,6 +67,9 @@ class Variant(TimestampMixin, Base):
     # BULK: price per single base unit (e.g. price per gram, or per ml).
     selling_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     cost_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=Decimal("0"))
+    cost_price_is_known: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     sku: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)

@@ -8,6 +8,8 @@ from app.models.bulk_preset import BulkPreset
 from app.models.product import Product
 from app.models.user import User
 from app.models.variant import Variant
+from app.models.activity_log import ActivityAction
+from app.services.audit import log_activity
 from app.schemas.bulk_preset import BulkPresetCreate, BulkPresetRead
 from app.schemas.product import VariantBrowseResult
 from app.schemas.variant import VariantCreate, VariantRead, VariantUpdate
@@ -62,7 +64,9 @@ def create_variant(
     if payload.sku and db.scalar(select(Variant).where(Variant.sku == payload.sku)):
         raise HTTPException(status_code=409, detail=f"SKU '{payload.sku}' already in use")
 
-    variant = Variant(product_id=product_id, **payload.model_dump())
+    variant_data = payload.model_dump()
+    variant_data["cost_price_is_known"] = "cost_price" in payload.model_fields_set
+    variant = Variant(product_id=product_id, **variant_data)
     db.add(variant)
     db.commit()
     db.refresh(variant)
@@ -239,10 +243,30 @@ def update_variant(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
-    variant = get_owned_variant(db, variant_id, user.shop_id)
+    variant = db.scalar(
+        select(Variant)
+        .join(Product)
+        .where(Variant.id == variant_id, Product.shop_id == user.shop_id)
+        .with_for_update(of=Variant)
+    )
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    cost_changed = "cost_price" in payload.model_fields_set and payload.cost_price is not None
 
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if value is None:
+            continue
         setattr(variant, field, value)
+    if cost_changed:
+        variant.cost_price_is_known = True
+        log_activity(
+            db,
+            user_id=user.id,
+            action=ActivityAction.INVENTORY_ADJUSTED,
+            entity_type="variant",
+            entity_id=variant.id,
+            description=f"Unit cost updated to {payload.cost_price}; historical sales retain their saved costs",
+        )
 
     db.commit()
     db.refresh(variant)

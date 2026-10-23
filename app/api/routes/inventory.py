@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,7 @@ from app.schemas.inventory import (
     StaffConsumptionCreate,
     StockAdjustment,
     StockMovementRead,
+    VariantCostRead,
     VariantStockRead,
 )
 from app.services.inventory import apply_stock_change
@@ -64,6 +66,27 @@ def low_stock(
     return db.scalars(query).all()
 
 
+@router.get("/costs", response_model=list[VariantCostRead])
+def inventory_costs(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    query = (
+        select(
+            Variant.id,
+            Variant.cost_price,
+            Variant.cost_price_is_known,
+        )
+        .join(Product)
+        .where(Product.shop_id == user.shop_id, Variant.is_active.is_(True))
+        .order_by(Variant.id)
+    )
+    return [
+        VariantCostRead(**row._mapping)
+        for row in db.execute(query).all()
+    ]
+
+
 @router.post("/{variant_id}/adjust", response_model=VariantStockRead)
 def adjust_stock(
     variant_id: int,
@@ -82,7 +105,42 @@ def adjust_stock(
             detail="STAFF_CONSUMPTION movements can only be created through staff consumption",
         )
 
-    variant = get_owned_variant(db, variant_id, user.shop_id)
+    variant = db.scalar(
+        select(Variant).join(Product).where(
+            Variant.id == variant_id, Product.shop_id == user.shop_id
+        ).with_for_update()
+    )
+    if variant is None:
+        raise HTTPException(status_code=404, detail="Variant not found")
+
+    if payload.movement_type == MovementType.PURCHASE:
+        if payload.delta <= 0:
+            raise HTTPException(status_code=422, detail="A purchase must add stock")
+        if payload.unit_cost is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Unit purchase cost is required when receiving stock",
+            )
+        if variant.quantity and not variant.cost_price_is_known:
+            raise HTTPException(
+                status_code=422,
+                detail="Record the cost of existing stock before receiving another purchase",
+            )
+
+        previous_value = variant.cost_price * variant.quantity
+        purchase_value = payload.unit_cost * payload.delta
+        variant.cost_price = (
+            (previous_value + purchase_value) / (variant.quantity + payload.delta)
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        variant.cost_price_is_known = True
+    elif payload.movement_type == MovementType.DAMAGE and payload.delta >= 0:
+        raise HTTPException(status_code=422, detail="Damage must remove stock")
+
+    movement_unit_cost = (
+        payload.unit_cost
+        if payload.movement_type == MovementType.PURCHASE
+        else (variant.cost_price if variant.cost_price_is_known and payload.delta < 0 else None)
+    )
 
     try:
         apply_stock_change(
@@ -92,6 +150,7 @@ def adjust_stock(
             movement_type=payload.movement_type,
             user_id=user.id,
             reason=payload.reason,
+            unit_cost_at_time=movement_unit_cost,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -99,7 +158,11 @@ def adjust_stock(
     log_activity(
         db, user_id=user.id, action=ActivityAction.INVENTORY_ADJUSTED,
         entity_type="variant", entity_id=variant.id,
-        description=f"{payload.movement_type.value}: {payload.delta:+d} ({payload.reason or 'no reason given'})",
+        description=(
+            f"{payload.movement_type.value}: {payload.delta:+d}"
+            f"{f' at {movement_unit_cost} each' if movement_unit_cost is not None else ''}"
+            f" ({payload.reason or 'no reason given'})"
+        )[:255],
     )
 
     db.commit()

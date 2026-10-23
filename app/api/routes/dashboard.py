@@ -30,7 +30,7 @@ def dashboard_summary(
     user: User = Depends(require_manager),
 ):
     today = date.today()
-    result = summarize_period(db, user.shop_id, today, today)
+    result = summarize_period(db, user.shop_id, today, today, include_report_details=False)
     return DashboardSummary(
         date=result["start_date"],
         total_sales=result["total_sales"],
@@ -39,6 +39,10 @@ def dashboard_summary(
         net_sales=result["net_sales"],
         transaction_count=result["transaction_count"],
         estimated_profit=result["estimated_profit"],
+        cost_of_goods_sold=result["cost_of_goods_sold"],
+        gross_profit=result["gross_profit"],
+        cost_data_complete=result["cost_data_complete"],
+        profit_status=result["profit_status"],
         low_stock_count=result["low_stock_count"],
         top_products=[TopProduct(**p) for p in result["top_products"]],
     )

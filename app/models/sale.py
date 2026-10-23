@@ -2,7 +2,7 @@ import enum
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Enum, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Enum, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -80,6 +80,9 @@ class SaleItem(TimestampMixin, Base):
     quantity: Mapped[int] = mapped_column(nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     unit_cost_at_sale: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    cost_is_known_at_sale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     line_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
     sale: Mapped[Sale] = relationship(back_populates="items")
