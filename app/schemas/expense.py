@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -11,6 +11,7 @@ class ExpenseCreate(BaseModel):
     category: Category
     description: str | None = Field(default=None, max_length=255)
     amount: Decimal = Field(..., gt=0)
+    funding_source: Literal['cash', 'bank'] = 'cash'
 
 
 class ExpenseRead(BaseModel):
@@ -22,5 +23,7 @@ class ExpenseRead(BaseModel):
     category: str
     description: str | None
     amount: Decimal
+    funding_source: str
     created_at: datetime
     user_name: str | None = None
+

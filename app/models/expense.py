@@ -10,18 +10,19 @@ from app.models.user import User
 
 
 class Expense(TimestampMixin, Base):
-    __tablename__ = "expenses"
-    __table_args__ = (CheckConstraint("amount > 0", name="ck_expenses_amount_positive"),)
+    __tablename__ = 'expenses'
+    __table_args__ = (CheckConstraint('amount > 0', name='ck_expenses_amount_positive'),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), nullable=False, index=True)
     session_id: Mapped[int | None] = mapped_column(
-        ForeignKey("cash_sessions.id"), nullable=True, index=True
+        ForeignKey('cash_sessions.id'), nullable=True, index=True
     )
 
     category: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    funding_source: Mapped[str] = mapped_column(String(10), nullable=False, default='cash', server_default='cash')
 
     user: Mapped[User] = relationship()
     session: Mapped[CashSession | None] = relationship()

@@ -7,6 +7,7 @@ from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
 from app.models.product import Product
 from app.models.stock_movement import MovementType, StockMovement
+from app.models.sale import SaleItem
 from app.models.user import User
 from app.models.variant import Variant
 from app.schemas.inventory import (
@@ -117,10 +118,12 @@ def adjust_stock(
         if payload.delta <= 0:
             raise HTTPException(status_code=422, detail="A purchase must add stock")
         if payload.unit_cost is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Unit purchase cost is required when receiving stock",
-            )
+            if not variant.cost_price_is_known:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Unit purchase cost is required when receiving stock (no recorded cost yet)",
+                )
+            payload.unit_cost = variant.cost_price
         if variant.quantity and not variant.cost_price_is_known:
             raise HTTPException(
                 status_code=422,
@@ -133,6 +136,20 @@ def adjust_stock(
             (previous_value + purchase_value) / (variant.quantity + payload.delta)
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         variant.cost_price_is_known = True
+        db.query(SaleItem).filter(
+            SaleItem.variant_id == variant.id,
+            SaleItem.cost_is_known_at_sale.is_(False),
+        ).update(
+            {'unit_cost_at_sale': variant.cost_price, 'cost_is_known_at_sale': True},
+            synchronize_session=False,
+        )
+        db.query(StockMovement).filter(
+            StockMovement.variant_id == variant.id,
+            StockMovement.unit_cost_at_time.is_(None),
+        ).update(
+            {'unit_cost_at_time': variant.cost_price},
+            synchronize_session=False,
+        )
     elif payload.movement_type == MovementType.DAMAGE and payload.delta >= 0:
         raise HTTPException(status_code=422, detail="Damage must remove stock")
 

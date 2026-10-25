@@ -41,7 +41,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
         )
     ) or Decimal("0.00")
     stock_use = db.scalar(
-        select(func.coalesce(func.sum(-StockMovement.quantity * StockMovement.unit_cost_at_time), 0))
+        select(func.coalesce(func.sum(-StockMovement.quantity * func.coalesce(StockMovement.unit_cost_at_time, 0)), 0))
         .join(Variant, Variant.id == StockMovement.variant_id)
         .join(Product, Product.id == Variant.product_id)
         .where(
@@ -138,7 +138,7 @@ def summarize_period(
     staff_consumption_total = db.scalar(
         select(
             func.coalesce(
-                func.sum(-StockMovement.quantity * StockMovement.unit_cost_at_time), 0
+                func.sum(-StockMovement.quantity * func.coalesce(StockMovement.unit_cost_at_time, 0)), 0
             )
         )
         .join(Variant, Variant.id == StockMovement.variant_id)

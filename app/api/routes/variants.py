@@ -8,6 +8,8 @@ from app.models.bulk_preset import BulkPreset
 from app.models.product import Product
 from app.models.user import User
 from app.models.variant import Variant
+from app.models.sale import SaleItem
+from app.models.stock_movement import StockMovement
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.schemas.bulk_preset import BulkPresetCreate, BulkPresetRead
@@ -280,6 +282,20 @@ def update_variant(
         setattr(variant, field, value)
     if cost_changed:
         variant.cost_price_is_known = True
+        db.query(SaleItem).filter(
+            SaleItem.variant_id == variant.id,
+            SaleItem.cost_is_known_at_sale.is_(False),
+        ).update(
+            {'unit_cost_at_sale': variant.cost_price, 'cost_is_known_at_sale': True},
+            synchronize_session=False,
+        )
+        db.query(StockMovement).filter(
+            StockMovement.variant_id == variant.id,
+            StockMovement.unit_cost_at_time.is_(None),
+        ).update(
+            {'unit_cost_at_time': variant.cost_price},
+            synchronize_session=False,
+        )
         log_activity(
             db,
             user_id=user.id,

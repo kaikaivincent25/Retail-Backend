@@ -160,7 +160,8 @@ def close_session(
 
     expenses_total = db.scalar(
         select(func.coalesce(func.sum(Expense.amount), 0)).where(
-            Expense.session_id == session.id
+            Expense.session_id == session.id,
+            Expense.funding_source == 'cash',
         )
     ) or Decimal("0.00")
 
