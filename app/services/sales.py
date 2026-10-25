@@ -49,20 +49,24 @@ def complete_sale(
         resolved: list[tuple[Variant, int]] = []
         subtotal = Decimal("0.00")
         requested_by_variant: dict[int, int] = {}
-        stock_before_by_variant: dict[int, int] = {}
-
         for entry in items:
             variant_id = entry["variant_id"]
-            variant = variants_by_id.get(variant_id)
-            if variant is None:
-                raise SaleError(f"Variant {variant_id} not found or inactive")
-
             quantity = entry["quantity"]
+            if quantity <= 0:
+                raise SaleError("Sale quantities must be greater than zero")
             requested_by_variant[variant_id] = (
                 requested_by_variant.get(variant_id, 0) + quantity
             )
-            stock_before_by_variant[variant_id] = variant.quantity
 
+        for variant_id, quantity in requested_by_variant.items():
+            variant = variants_by_id.get(variant_id)
+            if variant is None:
+                raise SaleError(f"Variant {variant_id} not found or inactive")
+            if variant.quantity < quantity:
+                raise SaleError(
+                    f"Insufficient stock for '{variant.name}': "
+                    f"have {variant.quantity}, requested {quantity}"
+                )
             subtotal += variant.selling_price * quantity
             resolved.append((variant, quantity))
 
@@ -101,34 +105,15 @@ def complete_sale(
                 line_total=line_total,
             ))
 
-            deducted_quantity = min(quantity, variant.quantity)
-            if deducted_quantity:
-                apply_stock_change(
-                    db,
-                    variant,
-                    delta=-deducted_quantity,
-                    movement_type=MovementType.SALE,
-                    user_id=cashier_id,
-                    reason=f"Sale #{sale.id}",
-                    unit_cost_at_time=variant.cost_price,
-                )
-
-        for variant_id, requested_quantity in requested_by_variant.items():
-            stock_before = stock_before_by_variant[variant_id]
-            shortfall = max(requested_quantity - stock_before, 0)
-            if shortfall:
-                variant = variants_by_id[variant_id]
-                log_activity(
-                    db,
-                    user_id=cashier_id,
-                    action=ActivityAction.SALE_COMPLETED,
-                    entity_type="sale_stock_conflict",
-                    entity_id=sale.id,
-                    description=(
-                        f"STOCK_CONFLICT: {variant.name}, sold {requested_quantity}, "
-                        f"had {stock_before}, shortfall {shortfall}"
-                    )[:255],
-                )
+            apply_stock_change(
+                db,
+                variant,
+                delta=-quantity,
+                movement_type=MovementType.SALE,
+                user_id=cashier_id,
+                reason=f"Sale #{sale.id}",
+                unit_cost_at_time=variant.cost_price,
+            )
         log_activity(
             db, user_id=cashier_id, action=ActivityAction.SALE_COMPLETED,
             entity_type="sale", entity_id=sale.id,
