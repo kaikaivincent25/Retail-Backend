@@ -16,3 +16,10 @@ def health_check():
 def db_health_check(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "connected"}
+
+
+@router.get("/health/ready")
+def readiness_check(db: Session = Depends(get_db)):
+    """Verify that the schema required by authentication is available."""
+    db.execute(text("SELECT id FROM users LIMIT 1"))
+    return {"status": "ok", "database": "ready"}

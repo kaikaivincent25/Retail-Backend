@@ -3,8 +3,9 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import (
     audit,
@@ -38,6 +39,15 @@ def run_database_migrations() -> None:
 app = FastAPI(title=settings.APP_NAME)
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled request error: %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "The backend could not complete this request. Check the Render service logs."},
+    )
+
+
 @app.on_event("startup")
 def startup() -> None:
     try:
@@ -49,11 +59,7 @@ def startup() -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://retailshop-information-system.vercel.app",
-    ],
+    allow_origins=[origin.strip().rstrip("/") for origin in settings.CORS_ORIGINS.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
