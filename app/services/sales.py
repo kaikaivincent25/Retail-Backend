@@ -67,6 +67,10 @@ def complete_sale(
                     f"Insufficient stock for '{variant.name}': "
                     f"have {variant.quantity}, requested {quantity}"
                 )
+            if not variant.cost_price_is_known:
+                raise SaleError(
+                    f"Cost is not recorded for '{variant.name}'. Receive stock with a purchase cost before selling it."
+                )
             subtotal += variant.selling_price * quantity
             resolved.append((variant, quantity))
 
@@ -162,6 +166,10 @@ def create_pending_mpesa_sale(
                     f"Insufficient stock for '{variant.name}': "
                     f"have {variant.quantity}, requested {quantity}"
                 )
+            if not variant.cost_price_is_known:
+                raise SaleError(
+                    f"Cost is not recorded for '{variant.name}'. Receive stock with a purchase cost before selling it."
+                )
             subtotal += variant.selling_price * quantity
             resolved.append((variant, quantity))
 
@@ -207,6 +215,7 @@ def create_pending_mpesa_sale(
                 movement_type=MovementType.ADJUSTMENT,
                 user_id=cashier_id,
                 reason=f"Reserved for pending M-Pesa sale #{sale.id}",
+                unit_cost_at_time=variant.cost_price,
             )
 
         db.commit()
@@ -250,6 +259,10 @@ def create_pending_manual_sale(
                     f"Insufficient stock for '{variant.name}': "
                     f"have {variant.quantity}, requested {quantity}"
                 )
+            if not variant.cost_price_is_known:
+                raise SaleError(
+                    f"Cost is not recorded for '{variant.name}'. Receive stock with a purchase cost before selling it."
+                )
             subtotal += variant.selling_price * quantity
             resolved.append((variant, quantity))
 
@@ -291,6 +304,7 @@ def create_pending_manual_sale(
                 movement_type=MovementType.ADJUSTMENT,
                 user_id=cashier_id,
                 reason=f"Reserved for pending manual M-Pesa sale #{sale.id}",
+                unit_cost_at_time=variant.cost_price,
             )
 
         db.commit()

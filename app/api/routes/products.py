@@ -91,7 +91,11 @@ def create_product(
     db.flush()
 
     variants = [
-        Variant(product_id=product.id, **variant.model_dump())
+        Variant(
+            product_id=product.id,
+            cost_price_is_known=variant.cost_price > 0,
+            **variant.model_dump(),
+        )
         for variant in payload.variants
     ]
     db.add_all(variants)

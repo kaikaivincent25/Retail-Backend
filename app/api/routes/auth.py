@@ -31,7 +31,12 @@ def signup(payload: ShopSignup, db: Session = Depends(get_db)):
             detail=f"Username '{payload.admin_username}' is already taken",
         )
 
-    shop = Shop(name=payload.shop_name, location=payload.shop_location, currency="KES")
+    shop = Shop(
+        name=payload.shop_name,
+        location=payload.shop_location,
+        currency="KES",
+        business_type=payload.business_type,
+    )
     db.add(shop)
     db.flush()
 

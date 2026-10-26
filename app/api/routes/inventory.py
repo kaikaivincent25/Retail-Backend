@@ -136,20 +136,6 @@ def adjust_stock(
             (previous_value + purchase_value) / (variant.quantity + payload.delta)
         ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         variant.cost_price_is_known = True
-        db.query(SaleItem).filter(
-            SaleItem.variant_id == variant.id,
-            SaleItem.cost_is_known_at_sale.is_(False),
-        ).update(
-            {'unit_cost_at_sale': variant.cost_price, 'cost_is_known_at_sale': True},
-            synchronize_session=False,
-        )
-        db.query(StockMovement).filter(
-            StockMovement.variant_id == variant.id,
-            StockMovement.unit_cost_at_time.is_(None),
-        ).update(
-            {'unit_cost_at_time': variant.cost_price},
-            synchronize_session=False,
-        )
     elif payload.movement_type == MovementType.DAMAGE and payload.delta >= 0:
         raise HTTPException(status_code=422, detail="Damage must remove stock")
 

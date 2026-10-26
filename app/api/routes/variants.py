@@ -14,7 +14,7 @@ from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.schemas.bulk_preset import BulkPresetCreate, BulkPresetRead
 from app.schemas.product import VariantBrowseResult
-from app.schemas.variant import VariantCreate, VariantRead, VariantUpdate
+from app.schemas.variant import CostResolution, VariantCreate, VariantRead, VariantUpdate
 
 router = APIRouter(tags=["Variants"])
 
@@ -282,32 +282,59 @@ def update_variant(
         setattr(variant, field, value)
     if cost_changed:
         variant.cost_price_is_known = True
-        db.query(SaleItem).filter(
-            SaleItem.variant_id == variant.id,
-            SaleItem.cost_is_known_at_sale.is_(False),
-        ).update(
-            {'unit_cost_at_sale': variant.cost_price, 'cost_is_known_at_sale': True},
-            synchronize_session=False,
-        )
-        db.query(StockMovement).filter(
-            StockMovement.variant_id == variant.id,
-            StockMovement.unit_cost_at_time.is_(None),
-        ).update(
-            {'unit_cost_at_time': variant.cost_price},
-            synchronize_session=False,
-        )
         log_activity(
             db,
             user_id=user.id,
             action=ActivityAction.INVENTORY_ADJUSTED,
             entity_type="variant",
             entity_id=variant.id,
-            description=f"Unit cost updated to {payload.cost_price}; historical sales retain their saved costs",
+            description=f"Unit cost updated to {payload.cost_price}; historical records were not rewritten",
         )
 
     db.commit()
     db.refresh(variant)
     return variant
+
+
+@router.post("/variants/{variant_id}/resolve-missing-costs")
+def resolve_missing_costs(
+    variant_id: int,
+    payload: CostResolution,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    """Explicitly repair legacy unknown costs without changing known history."""
+    variant = get_owned_variant(db, variant_id, user.shop_id)
+    sales_updated = db.query(SaleItem).filter(
+        SaleItem.variant_id == variant.id,
+        SaleItem.cost_is_known_at_sale.is_(False),
+    ).update(
+        {"unit_cost_at_sale": payload.unit_cost, "cost_is_known_at_sale": True},
+        synchronize_session=False,
+    )
+    movements_updated = db.query(StockMovement).filter(
+        StockMovement.variant_id == variant.id,
+        StockMovement.unit_cost_at_time.is_(None),
+        StockMovement.quantity < 0,
+    ).update(
+        {"unit_cost_at_time": payload.unit_cost},
+        synchronize_session=False,
+    )
+    variant.cost_price = payload.unit_cost
+    variant.cost_price_is_known = True
+    log_activity(
+        db,
+        user_id=user.id,
+        action=ActivityAction.INVENTORY_ADJUSTED,
+        entity_type="variant",
+        entity_id=variant.id,
+        description=(
+            f"Resolved missing costs at {payload.unit_cost}; "
+            f"{sales_updated} sales and {movements_updated} stock movements updated"
+        )[:255],
+    )
+    db.commit()
+    return {"sales_updated": sales_updated, "movements_updated": movements_updated}
 
 
 @router.delete("/variants/{variant_id}", status_code=status.HTTP_204_NO_CONTENT)

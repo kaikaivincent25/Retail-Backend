@@ -39,6 +39,10 @@ class VariantUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class CostResolution(BaseModel):
+    unit_cost: Decimal = Field(..., ge=0)
+
+
 class VariantRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

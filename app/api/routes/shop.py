@@ -99,6 +99,8 @@ def update_shop(
         shop.location = payload.location
     if payload.currency:
         shop.currency = payload.currency
+    if "business_type" in payload.model_fields_set and payload.business_type:
+        shop.business_type = payload.business_type
     for field in PAYMENT_DESTINATION_FIELDS & payload.model_fields_set:
         setattr(shop, field, getattr(payload, field))
 
