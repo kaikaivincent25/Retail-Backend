@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, text
@@ -16,6 +18,7 @@ from app.schemas.user import PasswordChange, ProfileUpdate, UserRead
 from app.services.audit import log_activity
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/signup", response_model=Token, status_code=201)
@@ -80,22 +83,33 @@ def login(
         ).mappings().first()
     except SQLAlchemyError:
         db.rollback()
+        logger.exception("Authentication query failed")
         raise HTTPException(
             status_code=503,
             detail="Authentication database schema is unavailable. Check the Render migration logs.",
         )
 
-    if user_row is None or not user_row["is_active"] or not verify_password(form_data.password, user_row["password_hash"]):
+    try:
+        if user_row is None or not user_row["is_active"] or not verify_password(form_data.password, user_row["password_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        role = user_row["role"].value if hasattr(user_row["role"], "value") else str(user_row["role"])
+        token = create_access_token(subject=str(user_row["id"]), role=role)
+        log_activity(db, user_id=user_row["id"], action=ActivityAction.LOGIN)
+        db.commit()
+        return Token(access_token=token, role=role)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Authentication processing failed")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=503,
+            detail="Authentication could not be completed. Check the Render service logs.",
         )
-    role = user_row["role"].value if hasattr(user_row["role"], "value") else str(user_row["role"])
-    token = create_access_token(subject=str(user_row["id"]), role=role)
-    log_activity(db, user_id=user_row["id"], action=ActivityAction.LOGIN)
-    db.commit()
-    return Token(access_token=token, role=role)
 
 
 @router.get("/me", response_model=UserRead)
