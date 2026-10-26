@@ -17,6 +17,11 @@ class SessionClose(BaseModel):
     closing_cash: Decimal = Field(..., ge=Decimal("0"))
 
 
+class SessionReconcile(BaseModel):
+    closing_cash: Decimal = Field(..., ge=Decimal("0"))
+    reason: str = Field(..., min_length=3, max_length=255)
+
+
 class CashSessionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -30,6 +35,8 @@ class CashSessionRead(BaseModel):
     status: SessionStatus
     created_at: datetime
     closed_at: datetime | None
+    recount_reason: str | None = None
+    recounted_at: datetime | None = None
 
 
 class CashDepositCreate(BaseModel):

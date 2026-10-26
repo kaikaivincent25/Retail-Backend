@@ -189,3 +189,43 @@ def close_session(
     db.commit()
     db.refresh(session)
     return session
+
+
+def reconcile_closed_session(
+    db: Session,
+    session_id: int,
+    user: User,
+    closing_cash: Decimal,
+    reason: str,
+) -> CashSession:
+    session = db.scalar(
+        select(CashSession).where(
+            CashSession.id == session_id,
+            CashSession.shop_id == user.shop_id,
+        ).with_for_update()
+    )
+    if session is None:
+        raise CashSessionError("Cash session not found")
+    if session.status != SessionStatus.CLOSED:
+        raise CashSessionError("Only a closed cash session can be corrected")
+    if user.role.value == "cashier" and session.user_id != user.id:
+        raise CashSessionError("You can only correct your own cash sessions")
+    if not reason.strip():
+        raise CashSessionError("A reason is required for a cash correction")
+
+    session.closing_cash = closing_cash
+    session.difference = closing_cash - (session.expected_cash or Decimal("0.00"))
+    session.recounted_at = func.now()
+    session.recounted_by_user_id = user.id
+    session.recount_reason = reason.strip()[:255]
+    log_activity(
+        db,
+        user_id=user.id,
+        action=ActivityAction.CASH_SESSION_CLOSED,
+        entity_type="cash_session",
+        entity_id=session.id,
+        description=f"Cash session corrected: {session.difference}; {session.recount_reason}",
+    )
+    db.commit()
+    db.refresh(session)
+    return session

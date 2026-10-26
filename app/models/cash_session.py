@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, text
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -36,6 +36,9 @@ class CashSession(TimestampMixin, Base):
     closing_cash: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     expected_cash: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     difference: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    recount_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    recounted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recounted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     status: Mapped[SessionStatus] = mapped_column(

@@ -15,6 +15,7 @@ from app.schemas.cash_session import (
     CashSessionRead,
     SessionClose,
     SessionOpen,
+    SessionReconcile,
 )
 from app.services.cash_sessions import (
     CashSessionError,
@@ -24,6 +25,7 @@ from app.services.cash_sessions import (
     list_cash_deposits,
     open_session,
     record_cash_deposit,
+    reconcile_closed_session,
 )
 
 router = APIRouter(prefix="/cash-sessions", tags=["Cash Sessions"])
@@ -118,6 +120,25 @@ def close_cash_session(
             session,
             closing_cash=Decimal(str(payload.closing_cash)),
             closed_by_user_id=user.id,
+        )
+    except CashSessionError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/{session_id}/reconcile", response_model=CashSessionRead)
+def reconcile_cash_session(
+    session_id: int,
+    payload: SessionReconcile,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    try:
+        return reconcile_closed_session(
+            db,
+            session_id=session_id,
+            user=user,
+            closing_cash=Decimal(str(payload.closing_cash)),
+            reason=payload.reason,
         )
     except CashSessionError as e:
         raise HTTPException(status_code=422, detail=str(e))
