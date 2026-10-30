@@ -42,11 +42,14 @@ app = FastAPI(title=settings.APP_NAME)
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled request error: %s %s", request.method, request.url.path, exc_info=exc)
+    # This forces FastAPI to send the exact Python error message back to your frontend
     return JSONResponse(
         status_code=500,
-        content={"detail": "The backend could not complete this request. Check the Render service logs."},
+        content={
+            "detail": str(exc),
+            "error_type": type(exc).__name__
+        },
     )
-
 
 @app.on_event("startup")
 def startup() -> None:
