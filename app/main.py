@@ -60,11 +60,18 @@ def startup() -> None:
         raise
 
 
-origins = [
+configured_origins = [
     origin.strip().rstrip("/")
     for origin in settings.CORS_ORIGINS.split(",")
     if origin.strip()
 ]
+# Keep the deployed frontend allowed even when Render has an incomplete
+# CORS_ORIGINS environment variable. Additional origins can still be supplied
+# through CORS_ORIGINS for local development or other approved deployments.
+origins = sorted(
+    set(configured_origins)
+    | {"https://retailshop-information-system.vercel.app"}
+)
 
 app.add_middleware(
     CORSMiddleware,
