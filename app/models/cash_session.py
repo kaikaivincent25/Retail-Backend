@@ -47,4 +47,4 @@ class CashSession(TimestampMixin, Base):
         nullable=False,
     )
 
-    user: Mapped[User] = relationship()
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
