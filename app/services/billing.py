@@ -42,6 +42,13 @@ def current_status(subscription: Subscription, now: datetime | None = None) -> S
     return SubscriptionStatus.EXPIRED
 
 
+def is_service_blocked(subscription: Subscription) -> bool:
+    return subscription.service_suspended or current_status(subscription) in {
+        SubscriptionStatus.EXPIRED,
+        SubscriptionStatus.CANCELED,
+    }
+
+
 def require_feature(db: Session, shop_id: int, feature_key: str) -> None:
     subscription, plan = get_subscription(db, shop_id)
     state = current_status(subscription)

@@ -51,3 +51,4 @@ class Subscription(TimestampMixin, Base):
     current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     grace_period_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    service_suspended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")

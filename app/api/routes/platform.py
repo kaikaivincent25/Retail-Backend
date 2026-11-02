@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,7 +14,7 @@ from app.models.shop import Shop
 from app.models.user import User
 from app.schemas.auth import Token
 from app.schemas.platform import PlatformActivityRead, PlatformOverview, PlatformShopRead
-from app.services.billing import current_status
+from app.services.billing import current_status, utc_now
 
 router = APIRouter(prefix="/platform", tags=["Platform"])
 
@@ -46,6 +48,14 @@ def _platform_subscription_counts(db: Session):
 def overview(db: Session = Depends(get_db), _: PlatformUser = Depends(require_platform_owner)):
     total, active, trialing, paid, expired = _platform_subscription_counts(db)
     total_active_users = db.scalar(select(func.count(User.id)).where(User.is_active.is_(True))) or 0
+    revenue = db.scalar(
+        select(func.coalesce(func.sum(BillingPlan.monthly_price), 0))
+        .select_from(Subscription)
+        .join(BillingPlan, BillingPlan.id == Subscription.plan_id)
+        .where(Subscription.status == "active", Subscription.service_suspended.is_(False))
+    ) or 0
+    new_shops = db.scalar(select(func.count(Shop.id)).where(Shop.created_at >= utc_now() - timedelta(days=30))) or 0
+    recent_activity = db.scalar(select(func.count(ActivityLog.id)).where(ActivityLog.created_at >= utc_now() - timedelta(days=7))) or 0
     return PlatformOverview(
         total_shops=total,
         active_shops=active,
@@ -53,6 +63,9 @@ def overview(db: Session = Depends(get_db), _: PlatformUser = Depends(require_pl
         paid_shops=paid,
         expired_shops=expired,
         total_active_users=total_active_users,
+        estimated_monthly_revenue=int(revenue),
+        new_shops_last_30_days=int(new_shops),
+        activity_events_last_7_days=int(recent_activity),
     )
 
 
@@ -85,6 +98,7 @@ def shops(db: Session = Depends(get_db), _: PlatformUser = Depends(require_platf
             trial_ends_at=subscription.trial_ends_at if subscription is not None else None,
             active_users=int(user_count or 0),
             last_activity_at=last_activity_at, is_suspended=shop.is_suspended,
+            service_suspended=subscription.service_suspended if subscription is not None else False,
         )
         for shop, plan_name, subscription, user_count, last_activity_at in rows
     ]
@@ -135,4 +149,32 @@ def reactivate_shop(
         raise HTTPException(status_code=404, detail="Shop not found")
     shop.is_suspended = False
     db.add(PlatformAuditLog(platform_user_id=platform_user.id, shop_id=shop_id, action="shop_reactivated", description="Shop reactivated by platform owner"))
+    db.commit()
+
+
+@router.post("/shops/{shop_id}/suspend-services", status_code=204)
+def suspend_services(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    platform_user: PlatformUser = Depends(require_platform_owner),
+):
+    subscription = db.scalar(select(Subscription).where(Subscription.shop_id == shop_id))
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    subscription.service_suspended = True
+    db.add(PlatformAuditLog(platform_user_id=platform_user.id, shop_id=shop_id, action="services_suspended", description="Shop services suspended by platform owner"))
+    db.commit()
+
+
+@router.post("/shops/{shop_id}/restore-services", status_code=204)
+def restore_services(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    platform_user: PlatformUser = Depends(require_platform_owner),
+):
+    subscription = db.scalar(select(Subscription).where(Subscription.shop_id == shop_id))
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    subscription.service_suspended = False
+    db.add(PlatformAuditLog(platform_user_id=platform_user.id, shop_id=shop_id, action="services_restored", description="Shop services restored by platform owner"))
     db.commit()

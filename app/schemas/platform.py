@@ -13,6 +13,7 @@ class PlatformShopRead(BaseModel):
     active_users: int
     last_activity_at: datetime | None
     is_suspended: bool
+    service_suspended: bool
 
 
 class PlatformOverview(BaseModel):
@@ -22,6 +23,9 @@ class PlatformOverview(BaseModel):
     paid_shops: int
     expired_shops: int
     total_active_users: int
+    estimated_monthly_revenue: int
+    new_shops_last_30_days: int
+    activity_events_last_7_days: int
 
 
 class PlatformActivityRead(BaseModel):

@@ -1,26 +1,32 @@
-from fastapi import APIRouter, Depends
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin
+from app.api.deps import get_current_user_for_billing
 from app.core.database import get_db
-from app.models.billing import BillingPlan
+from app.models.billing import BillingPlan, SubscriptionStatus
 from app.models.user import User
 from app.schemas.billing import BillingPlanRead, BillingRead
-from app.services.billing import current_status, get_subscription, utc_now
+from app.services.billing import TRIAL_DAYS, current_status, get_subscription, utc_now
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
 
 @router.get("/plans", response_model=list[BillingPlanRead])
-def list_plans(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+def list_plans(db: Session = Depends(get_db), user: User = Depends(get_current_user_for_billing)):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Only the shop administrator can view billing plans")
     return db.scalars(
         select(BillingPlan).where(BillingPlan.is_active.is_(True)).order_by(BillingPlan.monthly_price)
     ).all()
 
 
 @router.get("", response_model=BillingRead)
-def get_billing(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+def get_billing(db: Session = Depends(get_db), user: User = Depends(get_current_user_for_billing)):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Only the shop administrator can manage billing")
     subscription, plan = get_subscription(db, user.shop_id)
     now = utc_now()
     active_users = db.scalar(
@@ -38,3 +44,26 @@ def get_billing(db: Session = Depends(get_db), user: User = Depends(require_admi
         active_users=active_users,
         days_remaining=days_remaining,
     )
+
+
+@router.post("/start-trial", response_model=BillingRead)
+def start_trial(db: Session = Depends(get_db), user: User = Depends(get_current_user_for_billing)):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Only the shop administrator can start a trial")
+    subscription, current_plan = get_subscription(db, user.shop_id)
+    if current_plan.code != "free" or subscription.trial_ends_at is not None:
+        raise HTTPException(status_code=409, detail="The free trial has already been used")
+    business_plan = db.scalar(select(BillingPlan).where(BillingPlan.code == "business", BillingPlan.is_active.is_(True)))
+    if business_plan is None:
+        raise HTTPException(status_code=503, detail="Business trial plan is not configured")
+    start = utc_now()
+    end = start + timedelta(days=TRIAL_DAYS)
+    subscription.plan_id = business_plan.id
+    subscription.status = SubscriptionStatus.TRIALING
+    subscription.trial_ends_at = end
+    subscription.current_period_start = start
+    subscription.current_period_end = end
+    subscription.service_suspended = False
+    db.commit()
+    db.refresh(subscription)
+    return get_billing(db, user)
