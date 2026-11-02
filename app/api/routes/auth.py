@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -10,12 +11,14 @@ from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.activity_log import ActivityAction
+from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 from app.models.shop import Shop
 from app.models.user import User, UserRole
 from app.schemas.auth import Token
 from app.schemas.shop import ShopSignup
 from app.schemas.user import PasswordChange, ProfileUpdate, UserRead
 from app.services.audit import log_activity
+from app.services.billing import TRIAL_DAYS, utc_now
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 logger = logging.getLogger(__name__)
@@ -53,6 +56,21 @@ def signup(payload: ShopSignup, db: Session = Depends(get_db)):
     )
     db.add(admin)
     db.flush()
+
+    business_plan = db.scalar(select(BillingPlan).where(BillingPlan.code == "business"))
+    if business_plan is None:
+        raise HTTPException(status_code=503, detail="Billing plans are not configured yet")
+    trial_start = utc_now()
+    db.add(
+        Subscription(
+            shop_id=shop.id,
+            plan_id=business_plan.id,
+            status=SubscriptionStatus.TRIALING,
+            trial_ends_at=trial_start + timedelta(days=TRIAL_DAYS),
+            current_period_start=trial_start,
+            current_period_end=trial_start + timedelta(days=TRIAL_DAYS),
+        )
+    )
 
     log_activity(
         db,

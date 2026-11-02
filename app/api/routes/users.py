@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.security import hash_password
 from app.models.user import User
 from app.schemas.user import UserCreate, UserRead, UserUpdate
+from app.services.billing import enforce_user_limit
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -17,6 +18,7 @@ def create_user(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
+    enforce_user_limit(db, user.shop_id)
     if db.scalar(select(User).where(User.username == payload.username)):
         raise HTTPException(status_code=409, detail=f"Username '{payload.username}' already exists")
 
@@ -57,6 +59,8 @@ def update_user(
         raise HTTPException(status_code=422, detail="You cannot deactivate your own account")
     if target.id == user.id and payload.role is not None and payload.role.value != "admin":
         raise HTTPException(status_code=422, detail="You cannot change your own role")
+    if payload.is_active is True and not target.is_active:
+        enforce_user_limit(db, user.shop_id)
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(target, field, value)

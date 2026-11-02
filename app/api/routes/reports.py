@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.reporting import PeriodReport
 from app.services.reporting import summarize_period
+from app.services.billing import require_feature
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -19,6 +20,7 @@ def period_summary(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
+    require_feature(db, user.shop_id, "reports.full")
     if end_date < start_date:
         raise HTTPException(status_code=422, detail="end_date must not be before start_date")
     if (end_date - start_date) > timedelta(days=366):
