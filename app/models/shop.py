@@ -1,4 +1,4 @@
-from sqlalchemy import String, UniqueConstraint
+from sqlalchemy import Boolean, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -18,6 +18,7 @@ class Shop(TimestampMixin, Base):
     business_type: Mapped[str] = mapped_column(
         String(40), default="general_retail", server_default="general_retail", nullable=False
     )
+    is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     mpesa_pochi_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     mpesa_till_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     mpesa_paybill_number: Mapped[str | None] = mapped_column(String(50), nullable=True)

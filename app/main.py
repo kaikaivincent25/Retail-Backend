@@ -11,6 +11,7 @@ from app.api.routes import (
     audit,
     auth,
     billing,
+    platform,
     cash_sessions,
     dashboard,
     expenses,
@@ -87,6 +88,7 @@ app.include_router(inventory.router)
 app.include_router(variants.router)
 app.include_router(auth.router)
 app.include_router(billing.router)
+app.include_router(platform.router)
 app.include_router(expenses.router)
 app.include_router(products.router)
 app.include_router(sales.router)

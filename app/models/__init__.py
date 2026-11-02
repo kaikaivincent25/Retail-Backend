@@ -10,10 +10,12 @@ from app.models.variant import SaleMode, Unit, Variant
 from app.models.activity_log import ActivityAction, ActivityLog, HIGH_RISK_ACTIONS
 from app.models.bulk_preset import BulkPreset
 from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
+from app.models.platform import PlatformAuditLog, PlatformUser
 
 __all__ = [
     "CashDeposit", "CashSession", "DepositFrequency", "Expense", "MovementType", "PaymentMethod", "Product", "Sale",
     "SaleItem", "SaleMode", "SaleStatus", "SessionStatus", "Shop", "StockMovement",
     "Unit", "User", "UserRole", "Variant", "ActivityAction", "ActivityLog", "HIGH_RISK_ACTIONS", "BulkPreset",
     "BillingPlan", "Subscription", "SubscriptionStatus",
+    "PlatformAuditLog", "PlatformUser",
 ]
