@@ -8,8 +8,6 @@ from app.core.security import decode_access_token
 from app.models.user import User, UserRole
 from app.models.platform import PlatformUser
 from app.models.shop import Shop
-from app.models.billing import Subscription
-from app.services.billing import is_service_blocked
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 platform_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/platform/auth/login")
@@ -41,9 +39,6 @@ def get_current_user(
     )
     if user is None or not user.is_active or payload.get("scope", "shop") != "shop":
         raise credentials_error
-    subscription = db.scalar(select(Subscription).where(Subscription.shop_id == user.shop_id))
-    if subscription is not None and is_service_blocked(subscription):
-        raise HTTPException(status_code=402, detail="Your subscription is inactive. Open Billing to restore service.")
     return user
 
 

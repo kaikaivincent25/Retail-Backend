@@ -67,6 +67,7 @@ def signup(payload: ShopSignup, db: Session = Depends(get_db)):
             plan_id=business_plan.id,
             status=SubscriptionStatus.TRIALING,
             trial_ends_at=trial_start + timedelta(days=TRIAL_DAYS),
+            trial_used=True,
             current_period_start=trial_start,
             current_period_end=trial_start + timedelta(days=TRIAL_DAYS),
         )

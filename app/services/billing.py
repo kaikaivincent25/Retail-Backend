@@ -43,7 +43,7 @@ def current_status(subscription: Subscription, now: datetime | None = None) -> S
 
 
 def is_service_blocked(subscription: Subscription) -> bool:
-    return subscription.service_suspended or current_status(subscription) in {
+    return bool(subscription.service_suspended) or current_status(subscription) in {
         SubscriptionStatus.EXPIRED,
         SubscriptionStatus.CANCELED,
     }
@@ -52,6 +52,11 @@ def is_service_blocked(subscription: Subscription) -> bool:
 def require_feature(db: Session, shop_id: int, feature_key: str) -> None:
     subscription, plan = get_subscription(db, shop_id)
     state = current_status(subscription)
+    if subscription.service_suspended:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Optional services are suspended for this shop. Open Billing to restore access.",
+        )
     if state in {SubscriptionStatus.EXPIRED, SubscriptionStatus.CANCELED}:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,

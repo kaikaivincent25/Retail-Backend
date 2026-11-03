@@ -40,6 +40,7 @@ def get_billing(db: Session = Depends(get_db), user: User = Depends(get_current_
         plan=plan,
         status=current_status(subscription, now),
         trial_ends_at=subscription.trial_ends_at,
+        trial_used=subscription.trial_used,
         current_period_start=subscription.current_period_start,
         current_period_end=subscription.current_period_end,
         grace_period_ends_at=subscription.grace_period_ends_at,
@@ -53,7 +54,7 @@ def start_trial(db: Session = Depends(get_db), user: User = Depends(get_current_
     if user.role.value != "admin":
         raise HTTPException(status_code=403, detail="Only the shop administrator can start a trial")
     subscription, current_plan = get_subscription(db, user.shop_id)
-    if current_plan.code != "free" or subscription.trial_ends_at is not None:
+    if current_plan.code != "free" or subscription.trial_used:
         raise HTTPException(status_code=409, detail="The free trial has already been used")
     business_plan = db.scalar(select(BillingPlan).where(BillingPlan.code == "business", BillingPlan.is_active.is_(True)))
     if business_plan is None:
@@ -63,8 +64,34 @@ def start_trial(db: Session = Depends(get_db), user: User = Depends(get_current_
     subscription.plan_id = business_plan.id
     subscription.status = SubscriptionStatus.TRIALING
     subscription.trial_ends_at = end
+    subscription.trial_used = True
     subscription.current_period_start = start
     subscription.current_period_end = end
+    subscription.service_suspended = False
+    db.commit()
+    db.refresh(subscription)
+    return get_billing(db, user)
+
+
+@router.post("/cancel", response_model=BillingRead)
+def cancel_subscription(db: Session = Depends(get_db), user: User = Depends(get_current_user_for_billing)):
+    if user.role.value != "admin":
+        raise HTTPException(status_code=403, detail="Only the shop administrator can cancel the plan")
+    subscription, current_plan = get_subscription(db, user.shop_id)
+    if current_plan.code == "free":
+        raise HTTPException(status_code=409, detail="The shop is already on the free plan")
+    free_plan = db.scalar(select(BillingPlan).where(BillingPlan.code == "free", BillingPlan.is_active.is_(True)))
+    if free_plan is None:
+        raise HTTPException(status_code=503, detail="Free plan is not configured")
+    now = utc_now()
+    subscription.plan_id = free_plan.id
+    subscription.status = SubscriptionStatus.ACTIVE
+    subscription.trial_ends_at = None
+    subscription.trial_used = True
+    subscription.current_period_start = now
+    subscription.current_period_end = now + timedelta(days=36500)
+    subscription.grace_period_ends_at = None
+    subscription.canceled_at = now
     subscription.service_suspended = False
     db.commit()
     db.refresh(subscription)
@@ -82,6 +109,9 @@ def create_mpesa_checkout(
     plan = db.scalar(select(BillingPlan).where(BillingPlan.code == payload.plan_code, BillingPlan.is_active.is_(True)))
     if plan is None or plan.code == "free":
         raise HTTPException(status_code=404, detail="Paid billing plan not found")
+    subscription, _ = get_subscription(db, user.shop_id)
+    if current_status(subscription) == SubscriptionStatus.TRIALING:
+        raise HTTPException(status_code=409, detail="Your trial plan is locked until the trial ends or is canceled")
     if plan.monthly_price <= 0:
         raise HTTPException(status_code=422, detail="This plan cannot be paid through M-Pesa")
     try:
