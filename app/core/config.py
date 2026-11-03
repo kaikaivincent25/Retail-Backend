@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     MPESA_SHORTCODE: str = ""
     MPESA_PASSKEY: str = ""
     MPESA_CALLBACK_URL: str = ""
+    MPESA_BILLING_CALLBACK_URL: str = ""
     MPESA_TRANSACTION_TYPE: str = "CustomerPayBillOnline"
 
     _normalize_database_urls = field_validator("DATABASE_URL", "TEST_DATABASE_URL", mode="before")(

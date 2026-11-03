@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.billing import SubscriptionStatus
 
@@ -25,4 +25,26 @@ class BillingRead(BaseModel):
     grace_period_ends_at: datetime | None
     active_users: int
     days_remaining: int
+
+
+class MpesaCheckoutCreate(BaseModel):
+    plan_code: str = Field(min_length=2, max_length=40)
+    phone_number: str = Field(min_length=9, max_length=20)
+
+
+class MpesaCheckoutRead(BaseModel):
+    payment_id: int
+    plan_name: str
+    amount: int
+    phone_number: str
+    status: str
+    message: str
+
+
+class MpesaPaymentStatusRead(BaseModel):
+    payment_id: int
+    plan_name: str
+    amount: int
+    status: str
+    receipt_number: str | None
 

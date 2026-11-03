@@ -89,7 +89,26 @@ def _access_token(client: httpx.Client, base_url: str, key: str, secret: str) ->
 
 
 def request_stk_push(sale_id: int, amount: Decimal, phone_number: str) -> dict[str, str]:
-    key, secret, shortcode, passkey, callback_url = _required_settings()
+    return request_stk_push_for_reference(
+        reference=f"SALE{sale_id}",
+        description=f"Sale {sale_id}",
+        amount=amount,
+        phone_number=phone_number,
+        callback_url=settings.MPESA_CALLBACK_URL,
+    )
+
+
+def request_stk_push_for_reference(
+    *, reference: str, description: str, amount: Decimal, phone_number: str, callback_url: str
+) -> dict[str, str]:
+    key, secret, shortcode, passkey = (
+        settings.MPESA_CONSUMER_KEY,
+        settings.MPESA_CONSUMER_SECRET,
+        settings.MPESA_SHORTCODE,
+        settings.MPESA_PASSKEY,
+    )
+    if any(not value.strip() for value in (key, secret, shortcode, passkey, callback_url)):
+        raise MpesaConfigurationError("M-Pesa credentials and callback URL are not fully configured.")
     phone = normalize_phone_number(phone_number)
     base_url = settings.MPESA_BASE_URL.rstrip("/")
     timestamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime("%Y%m%d%H%M%S")
@@ -113,8 +132,8 @@ def request_stk_push(sale_id: int, amount: Decimal, phone_number: str) -> dict[s
                     "PartyB": shortcode,
                     "PhoneNumber": phone,
                     "CallBackURL": callback_url,
-                    "AccountReference": f"SALE{sale_id}",
-                    "TransactionDesc": f"Sale {sale_id}",
+                    "AccountReference": reference[:12],
+                    "TransactionDesc": description[:13],
                 },
             )
             response.raise_for_status()
@@ -131,8 +150,8 @@ def request_stk_push(sale_id: int, amount: Decimal, phone_number: str) -> dict[s
         raise MpesaRequestError("Safaricom Daraja returned an invalid STK response.")
     if str(result.get("ResponseCode")) != "0":
         logger.warning(
-            "Daraja rejected STK request for sale %s: %s",
-            sale_id,
+            "Daraja rejected STK request for reference %s: %s",
+            reference,
             result.get("ResponseDescription", "unknown provider response"),
         )
         raise MpesaRequestError(

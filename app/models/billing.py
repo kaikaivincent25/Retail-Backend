@@ -1,7 +1,9 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, String, UniqueConstraint
+from decimal import Decimal
+
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -14,6 +16,12 @@ class SubscriptionStatus(str, enum.Enum):
     PAST_DUE = "past_due"
     EXPIRED = "expired"
     CANCELED = "canceled"
+
+
+class BillingPaymentStatus(str, enum.Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class BillingPlan(TimestampMixin, Base):
@@ -52,3 +60,31 @@ class Subscription(TimestampMixin, Base):
     grace_period_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     service_suspended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+
+
+class BillingPayment(TimestampMixin, Base):
+    __tablename__ = "billing_payments"
+    __table_args__ = (
+        UniqueConstraint("checkout_request_id", name="uq_billing_payments_checkout_request_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("billing_plans.id"), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(12), nullable=False)
+    status: Mapped[BillingPaymentStatus] = mapped_column(
+        Enum(
+            BillingPaymentStatus,
+            native_enum=False,
+            length=20,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+        default=BillingPaymentStatus.PENDING,
+    )
+    checkout_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    merchant_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    receipt_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    provider_result_code: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -9,7 +9,7 @@ from app.models.user import User, UserRole
 from app.models.variant import SaleMode, Unit, Variant
 from app.models.activity_log import ActivityAction, ActivityLog, HIGH_RISK_ACTIONS
 from app.models.bulk_preset import BulkPreset
-from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
+from app.models.billing import BillingPayment, BillingPaymentStatus, BillingPlan, Subscription, SubscriptionStatus
 from app.models.platform import PlatformAuditLog, PlatformUser
 
 __all__ = [
