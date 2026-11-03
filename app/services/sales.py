@@ -8,7 +8,7 @@ from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
 from app.models.stock_movement import MovementType
 from app.models.variant import Variant
-from app.services.inventory import apply_stock_change
+from app.services.inventory import apply_stock_change, restore_reserved_stock
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 
@@ -99,7 +99,7 @@ def complete_sale(
         # 3. Create sale items, decrease inventory, and log stock movements
         for variant, quantity in resolved:
             line_total = variant.selling_price * quantity
-            sale.items.append(SaleItem(
+            sale_item = SaleItem(
                 variant_id=variant.id,
                 variant_name=variant.name,
                 quantity=quantity,
@@ -107,9 +107,11 @@ def complete_sale(
                 unit_cost_at_sale=variant.cost_price,
                 cost_is_known_at_sale=variant.cost_price_is_known,
                 line_total=line_total,
-            ))
+            )
+            sale.items.append(sale_item)
+            db.flush()
 
-            apply_stock_change(
+            result = apply_stock_change(
                 db,
                 variant,
                 delta=-quantity,
@@ -117,7 +119,10 @@ def complete_sale(
                 user_id=cashier_id,
                 reason=f"Sale #{sale.id}",
                 unit_cost_at_time=variant.cost_price,
+                sale_item_id=sale_item.id,
             )
+            sale_item.unit_cost_at_sale = result.total_cost / quantity
+            sale_item.cost_is_known_at_sale = True
         log_activity(
             db, user_id=cashier_id, action=ActivityAction.SALE_COMPLETED,
             entity_type="sale", entity_id=sale.id,
@@ -197,8 +202,7 @@ def create_pending_mpesa_sale(
         db.flush()
 
         for variant, quantity in resolved:
-            sale.items.append(
-                SaleItem(
+            sale_item = SaleItem(
                     variant_id=variant.id,
                     variant_name=variant.name,
                     quantity=quantity,
@@ -207,8 +211,9 @@ def create_pending_mpesa_sale(
                     cost_is_known_at_sale=variant.cost_price_is_known,
                     line_total=variant.selling_price * quantity,
                 )
-            )
-            apply_stock_change(
+            sale.items.append(sale_item)
+            db.flush()
+            result = apply_stock_change(
                 db,
                 variant,
                 delta=-quantity,
@@ -216,7 +221,10 @@ def create_pending_mpesa_sale(
                 user_id=cashier_id,
                 reason=f"Reserved for pending M-Pesa sale #{sale.id}",
                 unit_cost_at_time=variant.cost_price,
+                sale_item_id=sale_item.id,
             )
+            sale_item.unit_cost_at_sale = result.total_cost / quantity
+            sale_item.cost_is_known_at_sale = True
 
         db.commit()
         db.refresh(sale)
@@ -286,8 +294,7 @@ def create_pending_manual_sale(
         db.flush()
 
         for variant, quantity in resolved:
-            sale.items.append(
-                SaleItem(
+            sale_item = SaleItem(
                     variant_id=variant.id,
                     variant_name=variant.name,
                     quantity=quantity,
@@ -296,8 +303,9 @@ def create_pending_manual_sale(
                     cost_is_known_at_sale=variant.cost_price_is_known,
                     line_total=variant.selling_price * quantity,
                 )
-            )
-            apply_stock_change(
+            sale.items.append(sale_item)
+            db.flush()
+            result = apply_stock_change(
                 db,
                 variant,
                 delta=-quantity,
@@ -305,7 +313,10 @@ def create_pending_manual_sale(
                 user_id=cashier_id,
                 reason=f"Reserved for pending manual M-Pesa sale #{sale.id}",
                 unit_cost_at_time=variant.cost_price,
+                sale_item_id=sale_item.id,
             )
+            sale_item.unit_cost_at_sale = result.total_cost / quantity
+            sale_item.cost_is_known_at_sale = True
 
         db.commit()
         db.refresh(sale)
@@ -363,17 +374,17 @@ def release_pending_sale(
         )
         if variant is None:
             raise SaleError(f"Reserved variant {item.variant_id} no longer exists")
-        apply_stock_change(
+        restore_reserved_stock(
             db,
             variant,
-            delta=item.quantity,
-            movement_type=MovementType.ADJUSTMENT,
+            quantity=item.quantity,
             user_id=sale.cashier_id,
             reason=(
                 f"Released cancelled manual M-Pesa sale #{sale.id}"
                 if is_manual
                 else f"Released failed M-Pesa sale #{sale.id}"
             ),
+            sale_item_id=item.id,
         )
 
     sale.status = SaleStatus.FAILED

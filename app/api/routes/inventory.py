@@ -195,7 +195,7 @@ def record_staff_consumption(
         else "Staff consumption"
     )
     try:
-        movement = apply_stock_change(
+        result = apply_stock_change(
             db,
             variant,
             delta=-payload.quantity,
@@ -208,6 +208,7 @@ def record_staff_consumption(
         db.rollback()
         raise HTTPException(status_code=422, detail=str(e))
 
+    movement = result.movement
     db.flush()
     log_activity(
         db,

@@ -5,6 +5,7 @@ from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
 from app.models.shop import Shop
 from app.models.stock_movement import MovementType, StockMovement
+from app.models.stock_lot import StockLot, StockLotAllocation
 from app.models.user import User, UserRole
 from app.models.variant import SaleMode, Unit, Variant
 from app.models.activity_log import ActivityAction, ActivityLog, HIGH_RISK_ACTIONS
@@ -16,6 +17,7 @@ __all__ = [
     "CashDeposit", "CashSession", "DepositFrequency", "Expense", "MovementType", "PaymentMethod", "Product", "Sale",
     "SaleItem", "SaleMode", "SaleStatus", "SessionStatus", "Shop", "StockMovement",
     "Unit", "User", "UserRole", "Variant", "ActivityAction", "ActivityLog", "HIGH_RISK_ACTIONS", "BulkPreset",
+    "StockLot", "StockLotAllocation",
     "BillingPlan", "Subscription", "SubscriptionStatus",
     "PlatformAuditLog", "PlatformUser",
 ]
