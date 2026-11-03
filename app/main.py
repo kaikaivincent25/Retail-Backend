@@ -1,4 +1,5 @@
 import logging
+import secrets
 from pathlib import Path
 
 from alembic import command
@@ -43,15 +44,32 @@ app = FastAPI(title=settings.APP_NAME)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled request error: %s %s", request.method, request.url.path, exc_info=exc)
-    # This forces FastAPI to send the exact Python error message back to your frontend
+    error_id = secrets.token_hex(8)
+    logger.exception(
+        "Unhandled request error [%s]: %s %s",
+        error_id,
+        request.method,
+        request.url.path,
+        exc_info=exc,
+    )
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": str(exc),
-            "error_type": type(exc).__name__
-        },
+        content={"detail": "An unexpected server error occurred.", "error_id": error_id},
     )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.url.path.startswith(("/auth", "/platform/auth")):
+        response.headers.setdefault("Cache-Control", "no-store")
+    if settings.ENVIRONMENT.lower() in {"production", "prod"} and request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 @app.on_event("startup")
 def startup() -> None:
@@ -79,8 +97,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 app.include_router(health.router)
 app.include_router(audit.router)
