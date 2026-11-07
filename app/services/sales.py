@@ -1,9 +1,12 @@
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.customer import Customer
+from app.models.customer_payment import CustomerPayment
 from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
 from app.models.stock_movement import MovementType
@@ -11,7 +14,8 @@ from app.models.variant import Variant
 from app.services.inventory import apply_stock_change, restore_reserved_stock
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
-from app.services.accounting import post_completed_sale
+from app.services.accounting import post_completed_sale, post_customer_payment
+from app.services.customer_payments import calculate_customer_outstanding
 
 
 class SaleError(Exception):
@@ -27,9 +31,35 @@ def complete_sale(
     payment_method: PaymentMethod = PaymentMethod.CASH,
     session_id: int | None = None,
     client_id: UUID | None = None,
+    customer_id: int | None = None,
+    is_credit: bool = False,
+    due_date: date | None = None,
+    initial_payment: Decimal | None = None,
+    initial_payment_method: PaymentMethod | None = None,
 ) -> Sale:
     try:
-        if payment_method != PaymentMethod.CASH:
+        if is_credit:
+            if customer_id is None:
+                raise SaleError("A customer must be selected for credit purchases")
+            if due_date is None:
+                raise SaleError("Every credit sale requires a due date")
+            if due_date < date.today():
+                raise SaleError("Credit due date cannot be in the past")
+            customer = db.scalar(
+                select(Customer)
+                .where(Customer.id == customer_id, Customer.shop_id == shop_id)
+                .with_for_update()
+            )
+            if customer is None:
+                raise SaleError("Customer not found")
+            if not customer.is_active:
+                raise SaleError("Cannot make credit sales to an inactive customer")
+            init_amt = initial_payment or Decimal("0.00")
+            if init_amt < 0:
+                raise SaleError("Initial payment cannot be negative")
+            if init_amt > 0 and initial_payment_method is None:
+                raise SaleError("Select a payment method for the initial payment")
+        elif payment_method != PaymentMethod.CASH:
             raise SaleError("M-Pesa payments must use the STK Push checkout flow")
         # Lock variants in a stable order so concurrent checkouts cannot oversell.
         variant_ids = {entry["variant_id"] for entry in items}
@@ -76,11 +106,27 @@ def complete_sale(
             resolved.append((variant, quantity))
 
         total = subtotal  # no tax/discount logic yet — kept simple for the MVP
-        if amount_received < total:
+        if is_credit:
+            if init_amt > total:
+                raise SaleError(
+                    f"Initial payment ({init_amt}) cannot exceed the total ({total})"
+                )
+            credit_amount = total - init_amt
+            if customer.credit_limit is not None:
+                outstanding, _ = calculate_customer_outstanding(db, shop_id, customer_id)
+                if outstanding + credit_amount > customer.credit_limit:
+                    raise SaleError(
+                        f"Credit limit of {customer.credit_limit} exceeded. "
+                        f"Current outstanding is {outstanding}, requested credit is {credit_amount}"
+                    )
+            amount_received = init_amt
+            change = Decimal("0.00")
+        elif amount_received < total:
             raise SaleError(
                 f"Amount received ({amount_received}) is less than the total ({total})"
             )
-        change = amount_received - total
+        if not is_credit:
+            change = amount_received - total
 
         # 2. Create the sale header
         sale = Sale(
@@ -88,6 +134,9 @@ def complete_sale(
             cashier_id=cashier_id,
             client_id=client_id,
             session_id=session_id,
+            customer_id=customer_id,
+            is_credit=is_credit,
+            due_date=due_date,
             subtotal=subtotal,
             total=total,
             amount_received=amount_received,
@@ -124,12 +173,34 @@ def complete_sale(
             )
             sale_item.unit_cost_at_sale = result.total_cost / quantity
             sale_item.cost_is_known_at_sale = True
+        initial_payment_record = None
+        if is_credit and init_amt > 0:
+            initial_payment_record = CustomerPayment(
+                shop_id=shop_id,
+                customer_id=customer_id,
+                sale_id=sale.id,
+                session_id=session_id if initial_payment_method == PaymentMethod.CASH else None,
+                amount=init_amt,
+                payment_method=initial_payment_method,
+                reference="Down payment at checkout",
+                recorded_by_user_id=cashier_id,
+            )
+            db.add(initial_payment_record)
+            db.flush()
+
+        sale_desc = (
+            f"Credit sale #{sale.id} total {sale.total} for customer #{customer.id}"
+            if is_credit
+            else f"Sale #{sale.id} total {sale.total}"
+        )
         log_activity(
             db, user_id=cashier_id, action=ActivityAction.SALE_COMPLETED,
             entity_type="sale", entity_id=sale.id,
-            description=f"Sale #{sale.id} total {sale.total}",
+            description=sale_desc,
         )
         post_completed_sale(db, sale)
+        if initial_payment_record is not None:
+            post_customer_payment(db, initial_payment_record)
         # 4. Everything succeeded — commit as one unit
         db.commit()
         db.refresh(sale)

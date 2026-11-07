@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.models.cash_deposit import CashDeposit, DepositFrequency
+from app.models.customer_payment import CustomerPayment
 from app.models.cash_session import CashSession, SessionStatus
 from app.models.expense import Expense
 from app.models.shop import Shop
@@ -154,7 +155,15 @@ def close_session(
         select(func.coalesce(func.sum(Sale.total), 0)).where(
             Sale.session_id == session.id,
             Sale.payment_method == PaymentMethod.CASH,
+            Sale.is_credit.is_(False),
             Sale.status == SaleStatus.COMPLETED,
+        )
+    ) or Decimal("0.00")
+
+    cash_collections_total = db.scalar(
+        select(func.coalesce(func.sum(CustomerPayment.amount), 0)).where(
+            CustomerPayment.session_id == session.id,
+            CustomerPayment.payment_method == PaymentMethod.CASH,
         )
     ) or Decimal("0.00")
 
@@ -165,7 +174,7 @@ def close_session(
         )
     ) or Decimal("0.00")
 
-    expected = session.opening_cash + cash_sales_total - expenses_total
+    expected = session.opening_cash + cash_sales_total + cash_collections_total - expenses_total
     if closing_cash > expected:
         db.rollback()
         raise CashSessionError(

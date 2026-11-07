@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.accounting import Account, AccountType, JournalEntry, JournalLine
+from app.models.customer_payment import CustomerPayment
 from app.models.expense import Expense
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.models.shop import Shop
@@ -177,21 +178,26 @@ def post_completed_sale(db: Session, sale: Sale) -> JournalEntry:
     if any(not item.cost_is_known_at_sale for item in sale.items):
         raise AccountingError("Sale cost data is incomplete; the sale cannot be posted")
 
-    cash_account = (
-        "1000"
-        if sale.payment_method == PaymentMethod.CASH
-        else "1010"
-        if sale.payment_method
-        in {
-            PaymentMethod.MPESA,
-            PaymentMethod.POCHI,
-            PaymentMethod.TILL,
-            PaymentMethod.PAYBILL,
-        }
-        else None
-    )
-    if cash_account is None:
-        raise AccountingError(f"Unsupported sale payment method: {sale.payment_method}")
+    if getattr(sale, "is_credit", False):
+        debit_account = "1200"
+        debit_desc = "Accounts receivable"
+    else:
+        debit_account = (
+            "1000"
+            if sale.payment_method == PaymentMethod.CASH
+            else "1010"
+            if sale.payment_method
+            in {
+                PaymentMethod.MPESA,
+                PaymentMethod.POCHI,
+                PaymentMethod.TILL,
+                PaymentMethod.PAYBILL,
+            }
+            else None
+        )
+        if debit_account is None:
+            raise AccountingError(f"Unsupported sale payment method: {sale.payment_method}")
+        debit_desc = "Sale proceeds"
 
     sale_item_ids = [item.id for item in sale.items]
     allocation_totals = {
@@ -220,7 +226,7 @@ def post_completed_sale(db: Session, sale: Sale) -> JournalEntry:
         Decimal("0.00"),
     )
     lines: list[tuple[str, Decimal, Decimal, str | None]] = [
-        (cash_account, Decimal(sale.total), Decimal("0.00"), "Sale proceeds"),
+        (debit_account, Decimal(sale.total), Decimal("0.00"), debit_desc),
         ("4000", Decimal("0.00"), Decimal(sale.total), "Sales revenue"),
     ]
     if cost_of_goods_sold:
@@ -239,6 +245,55 @@ def post_completed_sale(db: Session, sale: Sale) -> JournalEntry:
         description=f"Sale #{sale.id}",
         created_by_user_id=sale.cashier_id,
         lines=lines,
+    )
+
+
+def post_customer_payment(db: Session, payment: CustomerPayment) -> JournalEntry:
+    if payment.amount <= 0:
+        raise AccountingError("Payment amount must be greater than zero")
+    cash_account = (
+        "1000"
+        if payment.payment_method == PaymentMethod.CASH
+        else "1010"
+        if payment.payment_method
+        in {
+            PaymentMethod.MPESA,
+            PaymentMethod.POCHI,
+            PaymentMethod.TILL,
+            PaymentMethod.PAYBILL,
+        }
+        else None
+    )
+    if cash_account is None:
+        raise AccountingError(f"Unsupported customer payment method: {payment.payment_method}")
+
+    entry_date = (
+        payment.created_at.date()
+        if hasattr(payment.created_at, "date")
+        else date.today()
+    )
+    return _create_or_verify_entry(
+        db,
+        shop_id=payment.shop_id,
+        entry_date=entry_date,
+        source_type="customer_payment",
+        source_id=payment.id,
+        description=f"Payment for Sale #{payment.sale_id} from Customer #{payment.customer_id}",
+        created_by_user_id=payment.recorded_by_user_id,
+        lines=[
+            (
+                cash_account,
+                Decimal(payment.amount),
+                Decimal("0.00"),
+                f"Collection via {payment.payment_method.value}",
+            ),
+            (
+                "1200",
+                Decimal("0.00"),
+                Decimal(payment.amount),
+                f"Receivable reduction for Sale #{payment.sale_id}",
+            ),
+        ],
     )
 
 

@@ -2,6 +2,7 @@ from app.models.accounting import Account, AccountType, JournalEntry, JournalLin
 from app.models.cash_session import CashSession, SessionStatus
 from app.models.cash_deposit import CashDeposit, DepositFrequency
 from app.models.customer import Customer
+from app.models.customer_payment import CustomerPayment
 from app.models.expense import Expense
 from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
@@ -17,7 +18,7 @@ from app.models.platform import PlatformAuditLog, PlatformUser
 
 __all__ = [
     "Account", "AccountType", "JournalEntry", "JournalLine",
-    "CashDeposit", "CashSession", "Customer", "DepositFrequency", "Expense", "MovementType", "PaymentMethod", "Product", "Sale",
+    "CashDeposit", "CashSession", "Customer", "CustomerPayment", "DepositFrequency", "Expense", "MovementType", "PaymentMethod", "Product", "Sale",
     "SaleItem", "SaleMode", "SaleStatus", "SessionStatus", "Shop", "StockMovement",
     "Unit", "User", "UserRole", "Variant", "ActivityAction", "ActivityLog", "HIGH_RISK_ACTIONS", "BulkPreset",
     "StockLot", "StockLotAllocation",

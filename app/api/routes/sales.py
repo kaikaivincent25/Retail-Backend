@@ -81,6 +81,11 @@ def create_sale(
             payment_method=payload.payment_method,
             session_id=session.id,
             client_id=payload.client_id,
+            customer_id=payload.customer_id,
+            is_credit=payload.is_credit,
+            due_date=payload.due_date,
+            initial_payment=payload.initial_payment,
+            initial_payment_method=payload.initial_payment_method,
         )
     except IntegrityError as exc:
         constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)

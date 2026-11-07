@@ -1,8 +1,10 @@
+from datetime import date, datetime
 from decimal import Decimal
-from datetime import datetime
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from app.models.sale import PaymentMethod
 
 CustomerName = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)
@@ -60,3 +62,49 @@ class CustomerRead(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class CustomerPaymentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sale_id: int
+    amount: Decimal = Field(..., gt=0, max_digits=10, decimal_places=2)
+    payment_method: PaymentMethod = PaymentMethod.CASH
+    reference: str | None = Field(default=None, max_length=100)
+
+
+class CustomerPaymentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    shop_id: int
+    customer_id: int
+    sale_id: int
+    session_id: int | None
+    amount: Decimal
+    payment_method: PaymentMethod
+    reference: str | None
+    recorded_by_user_id: int
+    recorded_by_name: str | None = None
+    created_at: datetime
+
+
+class CustomerInvoiceRead(BaseModel):
+    id: int
+    sale_id: int
+    created_at: datetime
+    due_date: date | None
+    total: Decimal
+    amount_paid: Decimal
+    balance: Decimal
+    status: str
+
+
+class CustomerLedgerRead(BaseModel):
+    customer: CustomerRead
+    total_credit_sales: Decimal
+    total_payments: Decimal
+    outstanding_balance: Decimal
+    overdue_balance: Decimal
+    invoices: list[CustomerInvoiceRead]
+    payments: list[CustomerPaymentRead]

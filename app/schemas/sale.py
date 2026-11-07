@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -15,17 +15,32 @@ class SaleItemIn(BaseModel):
 
 class SaleCreate(BaseModel):
     items: list[SaleItemIn] = Field(..., min_length=1)
-    amount_received: Decimal = Field(..., ge=0)
+    amount_received: Decimal = Field(default=Decimal("0.00"), ge=0)
     payment_method: PaymentMethod = PaymentMethod.CASH
     client_id: UUID | None = None
+    customer_id: int | None = None
+    is_credit: bool = False
+    due_date: date | None = None
+    initial_payment: Decimal | None = None
+    initial_payment_method: PaymentMethod | None = None
 
     @model_validator(mode="after")
-    def no_duplicate_variants(self):
+    def validate_sale(self):
         ids = [item.variant_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("Each variant should appear only once — combine quantities instead")
-        if self.payment_method != PaymentMethod.CASH:
-            raise ValueError("Use the M-Pesa STK Push endpoint for M-Pesa payments")
+        if self.is_credit:
+            if self.customer_id is None:
+                raise ValueError("Select a customer for credit sales")
+            if self.due_date is None:
+                raise ValueError("Every credit sale requires a due date")
+            if self.initial_payment is not None and self.initial_payment < 0:
+                raise ValueError("Initial payment cannot be negative")
+            if self.initial_payment and self.initial_payment > 0 and self.initial_payment_method is None:
+                raise ValueError("Select a payment method for the initial payment")
+        else:
+            if self.payment_method != PaymentMethod.CASH:
+                raise ValueError("Use the M-Pesa STK Push endpoint for M-Pesa payments")
         return self
 
 
@@ -89,6 +104,9 @@ class SaleRead(BaseModel):
     shop_id: int
     cashier_id: int
     client_id: UUID | None = None
+    customer_id: int | None = None
+    is_credit: bool = False
+    due_date: date | None = None
     session_id: int | None
     subtotal: Decimal
     total: Decimal
@@ -102,6 +120,8 @@ class SaleRead(BaseModel):
     payment_account_number: str | None = None
     items: list[SaleItemRead]
     created_at: datetime
+    amount_paid: Decimal | None = None
+    balance: Decimal | None = None
 
 
 class SaleDetailRead(SaleRead):

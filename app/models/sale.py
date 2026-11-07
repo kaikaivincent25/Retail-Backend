@@ -1,8 +1,10 @@
 import enum
 from decimal import Decimal
+from datetime import date
+from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,6 +12,10 @@ from app.core.database import Base
 from app.models.mixins import TimestampMixin
 from app.models.shop import Shop
 from app.models.user import User
+
+if TYPE_CHECKING:
+    from app.models.customer import Customer
+    from app.models.customer_payment import CustomerPayment
 
 
 class PaymentMethod(str, enum.Enum):
@@ -65,6 +71,18 @@ class Sale(TimestampMixin, Base):
     items: Mapped[list["SaleItem"]] = relationship(back_populates="sale", cascade="all, delete-orphan")
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("cash_sessions.id"), nullable=True, index=True
+    )
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id"), nullable=True, index=True
+    )
+    is_credit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    customer: Mapped["Customer | None"] = relationship()
+    payments: Mapped[list["CustomerPayment"]] = relationship(
+        back_populates="sale", cascade="all, delete-orphan"
     )
 
 
