@@ -29,6 +29,7 @@ from app.models import (
     StockMovement,
     User,
     UserRole,
+    Unit,
     Variant,
 )
 from app.services.accounting import (
@@ -101,8 +102,10 @@ def _setup_product_and_lot(db: Session, shop_id: int, user_id: int, price: Decim
     variant = Variant(
         product_id=product.id,
         name="Standard",
+        unit=Unit.PIECE,
         selling_price=price,
         cost_price=cost,
+        cost_price_is_known=True,
         quantity=qty,
         is_active=True,
     )

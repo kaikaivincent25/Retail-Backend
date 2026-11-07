@@ -199,6 +199,7 @@ def post_completed_sale(db: Session, sale: Sale) -> JournalEntry:
             raise AccountingError(f"Unsupported sale payment method: {sale.payment_method}")
         debit_desc = "Sale proceeds"
 
+    db.flush()
     sale_item_ids = [item.id for item in sale.items]
     allocation_totals = {
         row.sale_item_id: (int(row.quantity), Decimal(row.cost_total))
