@@ -34,10 +34,14 @@ class SaleCreate(BaseModel):
                 raise ValueError("Select a customer for credit sales")
             if self.due_date is None:
                 raise ValueError("Every credit sale requires a due date")
-            if self.initial_payment is not None and self.initial_payment < 0:
-                raise ValueError("Initial payment cannot be negative")
-            if self.initial_payment and self.initial_payment > 0 and self.initial_payment_method is None:
-                raise ValueError("Select a payment method for the initial payment")
+            if self.initial_payment is not None:
+                if self.initial_payment < 0:
+                    raise ValueError("Initial payment cannot be negative")
+                if self.initial_payment == 0:
+                    self.initial_payment = None
+                    self.initial_payment_method = None
+                elif self.initial_payment_method is None:
+                    self.initial_payment_method = PaymentMethod.CASH
         else:
             if self.payment_method != PaymentMethod.CASH:
                 raise ValueError("Use the M-Pesa STK Push endpoint for M-Pesa payments")

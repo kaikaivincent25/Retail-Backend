@@ -58,7 +58,7 @@ def complete_sale(
             if init_amt < 0:
                 raise SaleError("Initial payment cannot be negative")
             if init_amt > 0 and initial_payment_method is None:
-                raise SaleError("Select a payment method for the initial payment")
+                initial_payment_method = PaymentMethod.CASH
         elif payment_method != PaymentMethod.CASH:
             raise SaleError("M-Pesa payments must use the STK Push checkout flow")
         # Lock variants in a stable order so concurrent checkouts cannot oversell.
