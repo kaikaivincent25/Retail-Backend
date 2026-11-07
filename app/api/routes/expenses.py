@@ -11,6 +11,7 @@ from app.models.user import User, UserRole
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.schemas.expense import ExpenseCreate, ExpenseRead
 from app.services.cash_sessions import get_open_session
+from app.services.accounting import AccountingError, post_expense
 
 router = APIRouter(prefix="/expenses", tags=["Expenses"])
 
@@ -60,6 +61,15 @@ def create_expense(
         **payload.model_dump(),
     )
     db.add(expense)
+    db.flush()
+    try:
+        post_expense(db, expense, user.shop_id)
+    except AccountingError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Accounting could not post this expense; no expense was recorded. {exc}",
+        ) from exc
     db.commit()
     db.refresh(expense)
     return {**ExpenseRead.model_validate(expense).model_dump(), "user_name": user.full_name}

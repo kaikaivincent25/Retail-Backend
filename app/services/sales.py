@@ -11,6 +11,7 @@ from app.models.variant import Variant
 from app.services.inventory import apply_stock_change, restore_reserved_stock
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
+from app.services.accounting import post_completed_sale
 
 
 class SaleError(Exception):
@@ -128,6 +129,7 @@ def complete_sale(
             entity_type="sale", entity_id=sale.id,
             description=f"Sale #{sale.id} total {sale.total}",
         )
+        post_completed_sale(db, sale)
         # 4. Everything succeeded — commit as one unit
         db.commit()
         db.refresh(sale)
@@ -340,6 +342,7 @@ def confirm_manual_payment(
     sale.amount_received = sale.total
     sale.change = Decimal("0.00")
     sale.mpesa_receipt_number = receipt_number
+    post_completed_sale(db, sale)
     log_activity(
         db,
         user_id=confirmed_by_user_id,
@@ -429,6 +432,7 @@ def apply_stk_reconciliation(
             sale.status = SaleStatus.COMPLETED
             sale.amount_received = sale.total
             sale.change = Decimal("0.00")
+            post_completed_sale(db, sale)
             log_activity(
                 db,
                 user_id=reconciled_by_user_id,

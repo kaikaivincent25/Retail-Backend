@@ -21,6 +21,7 @@ from app.schemas.sale import (
     SaleRead,
 )
 from app.services.cash_sessions import get_open_session
+from app.services.accounting import AccountingError
 from app.services.mpesa import (
     MpesaConfigurationError,
     MpesaRequestError,
@@ -91,6 +92,12 @@ def create_sale(
         raise
     except SaleError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except AccountingError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Accounting could not post this sale; no sale was recorded. {exc}",
+        ) from exc
 
     return sale
 
@@ -204,6 +211,12 @@ def confirm_manual_mpesa_sale(
         return confirm_manual_payment(db, sale, payload.receipt_number, user.id)
     except SaleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AccountingError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Accounting could not post this payment; no payment was recorded. {exc}",
+        ) from exc
 
 
 @router.post("/{sale_id}/manual-payment/cancel", response_model=SaleRead)
@@ -231,6 +244,12 @@ def mpesa_callback(payload: dict, db: Session = Depends(get_db)):
         processed = process_stk_callback(db, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AccountingError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Accounting could not post the confirmed sale. {exc}",
+        ) from exc
     return {
         "ResultCode": 0,
         "ResultDesc": "Accepted" if processed else "Callback received for reconciliation",
@@ -282,6 +301,12 @@ def reconcile_mpesa_sale(
         )
     except SaleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AccountingError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=f"Accounting could not post the reconciled sale. {exc}",
+        ) from exc
 
     messages = {
         StkQueryStatus.COMPLETED: "Daraja confirmed the payment.",

@@ -7,9 +7,11 @@ from app.api.deps import require_admin, require_cashier
 from app.core.database import get_db
 from app.models.shop import Shop
 from app.models.activity_log import ActivityLog
+from app.models.accounting import Account, JournalEntry, JournalLine
 from app.models.bulk_preset import BulkPreset
 from app.models.cash_deposit import CashDeposit
 from app.models.cash_session import CashSession
+from app.models.customer import Customer
 from app.models.expense import Expense
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem
@@ -85,7 +87,9 @@ def update_shop(
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    shop = db.get(Shop, user.shop_id)
+    shop = db.scalar(
+        select(Shop).where(Shop.id == user.shop_id).with_for_update()
+    )
 
     if payload.name and payload.name != shop.name:
         if db.scalar(select(Shop).where(Shop.name == payload.name, Shop.id != shop.id)):
@@ -97,7 +101,16 @@ def update_shop(
 
     if "location" in payload.model_fields_set:
         shop.location = payload.location
-    if payload.currency:
+    if payload.currency and payload.currency != shop.currency:
+        if db.scalar(
+            select(JournalEntry.id)
+            .where(JournalEntry.shop_id == shop.id)
+            .limit(1)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Shop currency cannot change after accounting entries have been posted.",
+            )
         shop.currency = payload.currency
     if "business_type" in payload.model_fields_set and payload.business_type:
         shop.business_type = payload.business_type
@@ -131,6 +144,9 @@ def delete_shop(
         raise HTTPException(status_code=422, detail="Shop name confirmation does not match")
 
     shop_users = select(User.id).where(User.shop_id == shop.id)
+    shop_journal_entries = select(JournalEntry.id).where(
+        JournalEntry.shop_id == shop.id
+    )
     shop_sales = select(Sale.id).where(Sale.shop_id == shop.id)
     shop_products = select(Product.id).where(Product.shop_id == shop.id)
     shop_variants = select(Variant.id).where(Variant.product_id.in_(shop_products))
@@ -139,6 +155,14 @@ def delete_shop(
         # Remove dependent records first. All predicates are scoped to this tenant.
         db.execute(delete(SaleItem).where(SaleItem.sale_id.in_(shop_sales)))
         db.execute(delete(Sale).where(Sale.shop_id == shop.id))
+        db.execute(
+            delete(JournalLine).where(
+                JournalLine.journal_entry_id.in_(shop_journal_entries)
+            )
+        )
+        db.execute(delete(JournalEntry).where(JournalEntry.shop_id == shop.id))
+        db.execute(delete(Account).where(Account.shop_id == shop.id))
+        db.execute(delete(Customer).where(Customer.shop_id == shop.id))
         db.execute(delete(CashDeposit).where(CashDeposit.shop_id == shop.id))
         db.execute(delete(Expense).where(Expense.user_id.in_(shop_users)))
         db.execute(delete(StockMovement).where(StockMovement.variant_id.in_(shop_variants)))

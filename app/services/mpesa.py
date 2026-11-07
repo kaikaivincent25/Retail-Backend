@@ -15,6 +15,7 @@ from app.models.activity_log import ActivityAction
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.services.audit import log_activity
 from app.services.sales import release_pending_sale
+from app.services.accounting import post_completed_sale
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,7 @@ def process_stk_callback(db: Session, payload: dict[str, Any]) -> bool:
     sale.status = SaleStatus.COMPLETED
     sale.amount_received = paid_amount
     sale.mpesa_receipt_number = receipt
+    post_completed_sale(db, sale)
     log_activity(
         db,
         user_id=sale.cashier_id,

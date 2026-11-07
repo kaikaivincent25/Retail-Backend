@@ -10,9 +10,12 @@ from app.models.cash_session import CashSession, SessionStatus
 from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
 from app.models.shop import Shop
+from app.models.stock_lot import StockLot
 from app.models.stock_movement import MovementType, StockMovement
 from app.models.user import User, UserRole
 from app.models.variant import SaleMode, Unit, Variant
+from app.services.accounting import post_completed_sale
+from app.services.inventory import apply_stock_change
 
 SHOP_NAME = "Vincent Household & Grocery"
 
@@ -104,6 +107,14 @@ def main():
                 quantity=opening_stock, previous_quantity=0, new_quantity=opening_stock,
                 reason="Initial stock", user_id=admin.id,
                 unit_cost_at_time=cost,
+                created_at=datetime.now(timezone.utc) - timedelta(days=15),
+            ))
+            db.add(StockLot(
+                variant_id=variant.id,
+                received_quantity=opening_stock,
+                remaining_quantity=opening_stock,
+                unit_cost=cost,
+                created_at=datetime.now(timezone.utc) - timedelta(days=15),
             ))
             all_variants.append(variant)
 
@@ -145,19 +156,26 @@ def main():
 
                 line_total = (Decimal(str(variant.selling_price)) * qty).quantize(Decimal("0.01"))
                 subtotal += line_total
-                variant.quantity -= qty
 
-                db.add(SaleItem(
-                    sale_id=sale.id, variant_id=variant.id, variant_name=variant.name,
+                sale_item = SaleItem(
+                    variant_id=variant.id, variant_name=variant.name,
                     quantity=qty, unit_price=variant.selling_price,
                     unit_cost_at_sale=variant.cost_price, line_total=line_total,
                     cost_is_known_at_sale=variant.cost_price > 0,
-                ))
-                db.add(StockMovement(
-                    variant_id=variant.id, movement_type=MovementType.SALE,
-                    quantity=-qty, previous_quantity=variant.quantity + qty,
-                    new_quantity=variant.quantity, reason=f"Sale #{sale.id}", user_id=cashier.id,
-                ))
+                )
+                sale.items.append(sale_item)
+                db.flush()
+                cost_result = apply_stock_change(
+                    db,
+                    variant,
+                    delta=-qty,
+                    movement_type=MovementType.SALE,
+                    user_id=cashier.id,
+                    reason=f"Sale #{sale.id}",
+                    unit_cost_at_time=variant.cost_price,
+                    sale_item_id=sale_item.id,
+                )
+                sale_item.unit_cost_at_sale = cost_result.total_cost / qty
 
             if subtotal == 0:
                 db.delete(sale)
@@ -170,6 +188,7 @@ def main():
             sale.amount_received = received
             sale.change = received - total
             sale.created_at = sale_date
+            post_completed_sale(db, sale)
             sale_count += 1
 
     db.commit()

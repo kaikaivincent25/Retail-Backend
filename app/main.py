@@ -10,11 +10,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import (
     audit,
+    accounting,
     auth,
     billing,
     platform,
     cash_sessions,
     dashboard,
+    customers,
     expenses,
     health,
     inventory,
@@ -102,6 +104,7 @@ app.add_middleware(
 )
 app.include_router(health.router)
 app.include_router(audit.router)
+app.include_router(accounting.router)
 app.include_router(inventory.router)
 app.include_router(variants.router)
 app.include_router(auth.router)
@@ -111,6 +114,7 @@ app.include_router(expenses.router)
 app.include_router(products.router)
 app.include_router(sales.router)
 app.include_router(cash_sessions.router)
+app.include_router(customers.router)
 app.include_router(users.router)
 app.include_router(dashboard.router)
 app.include_router(reports.router)
