@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_current_user
+from app.api.routes.dashboard import dashboard_summary
 from app.core.database import Base, get_db
 from app.main import app
 from app.models import (
@@ -566,3 +567,59 @@ def test_customer_ledger_and_accounting_endpoints(test_setup):
     finally:
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_admin_dashboard_includes_credit_sales_and_balances(test_setup, monkeypatch):
+    db, shop, manager, cashier, customer = test_setup
+    monkeypatch.setattr(
+        "app.api.routes.dashboard.summarize_period",
+        lambda *_args, **_kwargs: {
+            "start_date": date.today().isoformat(),
+            "total_sales": Decimal("1000.00"),
+            "expense_total": Decimal("0.00"),
+            "staff_consumption_total": Decimal("0.00"),
+            "net_sales": Decimal("1000.00"),
+            "transaction_count": 1,
+            "estimated_profit": Decimal("400.00"),
+            "cost_of_goods_sold": Decimal("600.00"),
+            "gross_profit": Decimal("400.00"),
+            "cost_data_complete": True,
+            "profit_status": "complete",
+            "low_stock_count": 0,
+            "top_products": [],
+        },
+    )
+    variant = _setup_product_and_lot(
+        db, shop.id, cashier.id, Decimal("1000.00"), Decimal("600.00")
+    )
+    sale = complete_sale(
+        db,
+        shop_id=shop.id,
+        cashier_id=cashier.id,
+        items=[{"variant_id": variant.id, "quantity": 1}],
+        amount_received=Decimal("0.00"),
+        payment_method=PaymentMethod.CASH,
+        customer_id=customer.id,
+        is_credit=True,
+        due_date=date.today() + timedelta(days=7),
+    )
+    db.add(
+        CustomerPayment(
+            shop_id=shop.id,
+            customer_id=customer.id,
+            sale_id=sale.id,
+            amount=Decimal("250.00"),
+            payment_method=PaymentMethod.CASH,
+            recorded_by_user_id=cashier.id,
+        )
+    )
+    db.commit()
+
+    summary = dashboard_summary(db=db, user=manager)
+
+    assert summary.credit_sales_total == Decimal("1000.00")
+    assert summary.credit_sales_count == 1
+    assert len(summary.recent_credit_sales) == 1
+    assert summary.recent_credit_sales[0].customer_name == customer.full_name
+    assert summary.recent_credit_sales[0].amount_paid == Decimal("250.00")
+    assert summary.recent_credit_sales[0].balance == Decimal("750.00")

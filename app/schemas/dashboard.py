@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
@@ -13,9 +13,22 @@ class TopProduct(BaseModel):
     quantity_sold: int
 
 
+class CreditSaleSummary(BaseModel):
+    id: int
+    customer_name: str
+    total: Decimal
+    amount_paid: Decimal
+    balance: Decimal
+    due_date: date | None
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     date: str
     total_sales: Decimal
+    credit_sales_total: Decimal
+    credit_sales_count: int
+    recent_credit_sales: list[CreditSaleSummary]
     expense_total: Decimal
     staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal

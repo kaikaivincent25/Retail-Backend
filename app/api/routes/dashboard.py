@@ -1,8 +1,9 @@
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
@@ -15,6 +16,7 @@ from app.models.user import User
 from app.models.variant import Variant
 from app.schemas.dashboard import (
     CashierDashboardSummary,
+    CreditSaleSummary,
     DashboardSummary,
     TopProduct,
 )
@@ -30,10 +32,56 @@ def dashboard_summary(
     user: User = Depends(require_manager),
 ):
     today = date.today()
+    start = datetime.combine(today, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(today, time.max, tzinfo=timezone.utc)
     result = summarize_period(db, user.shop_id, today, today, include_report_details=False)
+    credit_sales_total, credit_sales_count = db.execute(
+        select(
+            func.coalesce(func.sum(Sale.total), 0),
+            func.count(Sale.id),
+        ).where(
+            Sale.shop_id == user.shop_id,
+            Sale.status == SaleStatus.COMPLETED,
+            Sale.is_credit.is_(True),
+            Sale.created_at >= start,
+            Sale.created_at <= end,
+        )
+    ).one()
+    recent_credit_sales = db.scalars(
+        select(Sale)
+        .options(joinedload(Sale.customer), selectinload(Sale.payments))
+        .where(
+            Sale.shop_id == user.shop_id,
+            Sale.status == SaleStatus.COMPLETED,
+            Sale.is_credit.is_(True),
+            Sale.created_at >= start,
+            Sale.created_at <= end,
+        )
+        .order_by(Sale.created_at.desc(), Sale.id.desc())
+        .limit(8)
+    ).all()
+    credit_sale_summaries: list[CreditSaleSummary] = []
+    for sale in recent_credit_sales:
+        amount_paid = sum(
+            (payment.amount for payment in sale.payments), Decimal("0.00")
+        )
+        credit_sale_summaries.append(
+            CreditSaleSummary(
+                id=sale.id,
+                customer_name=sale.customer.full_name if sale.customer else "Customer unavailable",
+                total=sale.total,
+                amount_paid=amount_paid,
+                balance=max(sale.total - amount_paid, Decimal("0.00")),
+                due_date=sale.due_date,
+                created_at=sale.created_at,
+            )
+        )
     return DashboardSummary(
         date=result["start_date"],
         total_sales=result["total_sales"],
+        credit_sales_total=credit_sales_total,
+        credit_sales_count=credit_sales_count,
+        recent_credit_sales=credit_sale_summaries,
         expense_total=result["expense_total"],
         staff_consumption_total=result["staff_consumption_total"],
         net_sales=result["net_sales"],
