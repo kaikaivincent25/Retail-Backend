@@ -64,6 +64,53 @@ def get_open_session(
     return db.scalar(query.order_by(CashSession.id.desc()))
 
 
+def get_cash_session_breakdown(db: Session, session: CashSession) -> dict[str, Decimal]:
+    cash_sales_total = db.scalar(
+        select(func.coalesce(func.sum(Sale.total), 0)).where(
+            Sale.session_id == session.id,
+            Sale.payment_method == PaymentMethod.CASH,
+            Sale.is_credit.is_(False),
+            Sale.status == SaleStatus.COMPLETED,
+        )
+    ) or Decimal("0.00")
+
+    cash_collections_total = db.scalar(
+        select(func.coalesce(func.sum(CustomerPayment.amount), 0)).where(
+            CustomerPayment.session_id == session.id,
+            CustomerPayment.payment_method == PaymentMethod.CASH,
+        )
+    ) or Decimal("0.00")
+
+    cash_expenses_total = db.scalar(
+        select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            Expense.session_id == session.id,
+            Expense.funding_source == "cash",
+        )
+    ) or Decimal("0.00")
+
+    credit_sales_total = db.scalar(
+        select(func.coalesce(func.sum(Sale.total), 0)).where(
+            Sale.session_id == session.id,
+            Sale.is_credit.is_(True),
+            Sale.status == SaleStatus.COMPLETED,
+        )
+    ) or Decimal("0.00")
+
+    expected_cash = (
+        session.opening_cash
+        + cash_sales_total
+        + cash_collections_total
+        - cash_expenses_total
+    )
+    return {
+        "cash_sales_total": cash_sales_total,
+        "cash_collections_total": cash_collections_total,
+        "cash_expenses_total": cash_expenses_total,
+        "credit_sales_total": credit_sales_total,
+        "expected_cash": expected_cash,
+    }
+
+
 def open_session(db: Session, user_id: int, shop_id: int) -> CashSession:
     # Serialize opening attempts for a shop, including concurrent requests.
     shop = db.scalar(select(Shop.id).where(Shop.id == shop_id).with_for_update())
@@ -151,36 +198,18 @@ def close_session(
         db.rollback()
         raise CashSessionError("This session is already closed")
 
-    cash_sales_total = db.scalar(
-        select(func.coalesce(func.sum(Sale.total), 0)).where(
-            Sale.session_id == session.id,
-            Sale.payment_method == PaymentMethod.CASH,
-            Sale.is_credit.is_(False),
-            Sale.status == SaleStatus.COMPLETED,
-        )
-    ) or Decimal("0.00")
-
-    cash_collections_total = db.scalar(
-        select(func.coalesce(func.sum(CustomerPayment.amount), 0)).where(
-            CustomerPayment.session_id == session.id,
-            CustomerPayment.payment_method == PaymentMethod.CASH,
-        )
-    ) or Decimal("0.00")
-
-    expenses_total = db.scalar(
-        select(func.coalesce(func.sum(Expense.amount), 0)).where(
-            Expense.session_id == session.id,
-            Expense.funding_source == 'cash',
-        )
-    ) or Decimal("0.00")
-
-    expected = session.opening_cash + cash_sales_total + cash_collections_total - expenses_total
+    breakdown = get_cash_session_breakdown(db, session)
+    expected = breakdown["expected_cash"]
     if closing_cash > expected:
         db.rollback()
         raise CashSessionError(
             f"Closing cash cannot exceed the expected amount of {expected}."
         )
 
+    session.cash_sales_total = breakdown["cash_sales_total"]
+    session.cash_collections_total = breakdown["cash_collections_total"]
+    session.cash_expenses_total = breakdown["cash_expenses_total"]
+    session.credit_sales_total = breakdown["credit_sales_total"]
     session.closing_cash = closing_cash
     session.expected_cash = expected
     session.difference = closing_cash - expected

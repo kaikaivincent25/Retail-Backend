@@ -29,6 +29,10 @@ class CashSessionRead(BaseModel):
     shop_id: int
     user_id: int
     opening_cash: Decimal
+    cash_sales_total: Decimal | None = None
+    cash_collections_total: Decimal | None = None
+    cash_expenses_total: Decimal | None = None
+    credit_sales_total: Decimal | None = None
     closing_cash: Decimal | None
     expected_cash: Decimal | None
     difference: Decimal | None

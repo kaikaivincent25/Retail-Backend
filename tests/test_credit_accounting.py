@@ -15,6 +15,7 @@ from app.models import (
     CashSession,
     Customer,
     CustomerPayment,
+    Expense,
     JournalEntry,
     MovementType,
     PaymentMethod,
@@ -257,6 +258,10 @@ def test_credit_sale_posts_balanced_journal_and_does_not_affect_till_cash(test_s
     closed = close_session(db, session, closing_cash=Decimal("0.00"), closed_by_user_id=cashier.id)
     assert closed.expected_cash == Decimal("0.00")
     assert closed.closing_cash == Decimal("0.00")
+    assert closed.cash_sales_total == Decimal("0.00")
+    assert closed.cash_collections_total == Decimal("0.00")
+    assert closed.cash_expenses_total == Decimal("0.00")
+    assert closed.credit_sales_total == Decimal("1000.00")
 
 
 def test_credit_sale_with_initial_payment_and_repayment(test_setup):
@@ -308,9 +313,9 @@ def test_credit_sale_with_initial_payment_and_repayment(test_setup):
         amount=Decimal("300.00"),
         payment_method=PaymentMethod.CASH,
         reference="Receipt #123",
-        session_id=session.id,
     )
     assert repayment1.amount == Decimal("300.00")
+    assert repayment1.session_id == session.id
 
     # Outstanding is now 500
     outstanding, _ = calculate_customer_outstanding(db, shop.id, customer.id)
@@ -365,11 +370,99 @@ def test_credit_sale_with_initial_payment_and_repayment(test_setup):
     closed = close_session(db, session, closing_cash=Decimal("500.00"), closed_by_user_id=cashier.id)
     assert closed.expected_cash == Decimal("500.00")
     assert closed.difference == Decimal("0.00")
+    assert closed.cash_sales_total == Decimal("0.00")
+    assert closed.cash_collections_total == Decimal("500.00")
+    assert closed.cash_expenses_total == Decimal("0.00")
+    assert closed.credit_sales_total == Decimal("1000.00")
+
+
+def test_cash_credit_collection_requires_open_cash_session(test_setup):
+    db, shop, _manager, cashier, customer = test_setup
+    variant = _setup_product_and_lot(
+        db, shop.id, cashier.id, Decimal("1000.00"), Decimal("600.00")
+    )
+    session = open_session(db, user_id=cashier.id, shop_id=shop.id)
+    sale = complete_sale(
+        db,
+        shop_id=shop.id,
+        cashier_id=cashier.id,
+        items=[{"variant_id": variant.id, "quantity": 1}],
+        amount_received=Decimal("0.00"),
+        session_id=session.id,
+        customer_id=customer.id,
+        is_credit=True,
+        due_date=date.today() + timedelta(days=30),
+    )
+    close_session(
+        db, session, closing_cash=Decimal("0.00"), closed_by_user_id=cashier.id
+    )
+
+    with pytest.raises(CustomerPaymentError, match="Open a cash session"):
+        record_customer_payment(
+            db,
+            shop_id=shop.id,
+            user_id=cashier.id,
+            customer_id=customer.id,
+            sale_id=sale.id,
+            amount=Decimal("100.00"),
+            payment_method=PaymentMethod.CASH,
+        )
+
+
+def test_till_breakdown_itemizes_cash_activity_and_credit_invoices(test_setup):
+    db, shop, _manager, cashier, customer = test_setup
+    variant = _setup_product_and_lot(
+        db, shop.id, cashier.id, Decimal("1000.00"), Decimal("600.00")
+    )
+    session = open_session(db, user_id=cashier.id, shop_id=shop.id)
+
+    complete_sale(
+        db,
+        shop_id=shop.id,
+        cashier_id=cashier.id,
+        items=[{"variant_id": variant.id, "quantity": 1}],
+        amount_received=Decimal("200.00"),
+        session_id=session.id,
+        customer_id=customer.id,
+        is_credit=True,
+        due_date=date.today() + timedelta(days=30),
+        initial_payment=Decimal("200.00"),
+        initial_payment_method=PaymentMethod.CASH,
+    )
+    complete_sale(
+        db,
+        shop_id=shop.id,
+        cashier_id=cashier.id,
+        items=[{"variant_id": variant.id, "quantity": 1}],
+        amount_received=Decimal("1000.00"),
+        session_id=session.id,
+    )
+    db.add(
+        Expense(
+            user_id=cashier.id,
+            session_id=session.id,
+            category="Supplies",
+            description="Till purchase",
+            amount=Decimal("150.00"),
+            funding_source="cash",
+        )
+    )
+    db.flush()
+
+    closed = close_session(
+        db, session, closing_cash=Decimal("1050.00"), closed_by_user_id=cashier.id
+    )
+    assert closed.cash_sales_total == Decimal("1000.00")
+    assert closed.cash_collections_total == Decimal("200.00")
+    assert closed.cash_expenses_total == Decimal("150.00")
+    assert closed.credit_sales_total == Decimal("1000.00")
+    assert closed.expected_cash == Decimal("1050.00")
 
 
 def test_customer_ledger_and_accounting_endpoints(test_setup):
     db, shop, manager, cashier, customer = test_setup
     variant = _setup_product_and_lot(db, shop.id, cashier.id, Decimal("1000.00"), Decimal("500.00"))
+    session = open_session(db, user_id=cashier.id, shop_id=shop.id)
 
     # Create credit sale with due date in the past to test overdue aging
     past_due = date.today() - timedelta(days=10)
@@ -377,6 +470,7 @@ def test_customer_ledger_and_accounting_endpoints(test_setup):
         shop_id=shop.id,
         cashier_id=cashier.id,
         customer_id=customer.id,
+        session_id=session.id,
         is_credit=True,
         due_date=past_due,
         subtotal=Decimal("1000.00"),
@@ -430,6 +524,15 @@ def test_customer_ledger_and_accounting_endpoints(test_setup):
     client = TestClient(app)
 
     try:
+        cash_res = client.get("/cash-sessions/current")
+        assert cash_res.status_code == 200
+        cash_data = cash_res.json()
+        assert cash_data["cash_sales_total"] == "0.00"
+        assert cash_data["cash_collections_total"] == "0.00"
+        assert cash_data["cash_expenses_total"] == "0.00"
+        assert cash_data["credit_sales_total"] == "1000.00"
+        assert cash_data["expected_cash"] == "0.00"
+
         # Receivables endpoint
         r_res = client.get("/accounting/receivables")
         assert r_res.status_code == 200

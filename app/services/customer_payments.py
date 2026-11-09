@@ -188,11 +188,17 @@ def record_customer_payment(
             "Overpayments are not permitted."
         )
 
-    # If cash payment, link to open cash session
-    if payment_method == PaymentMethod.CASH and session_id is None:
-        open_session = get_open_session(db, shop_id)
-        if open_session is not None:
-            session_id = open_session.id
+    if payment_method == PaymentMethod.CASH:
+        open_session = get_open_session(db, shop_id, lock=True)
+        if open_session is None:
+            raise CustomerPaymentError(
+                "Open a cash session before recording a cash customer payment"
+            )
+        if session_id is not None and session_id != open_session.id:
+            raise CustomerPaymentError(
+                "Cash customer payments must be recorded in the open cash session"
+            )
+        session_id = open_session.id
 
     payment = CustomerPayment(
         shop_id=shop_id,

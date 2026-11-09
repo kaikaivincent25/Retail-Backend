@@ -22,6 +22,7 @@ from app.services.cash_sessions import (
     close_session,
     get_depositable_cash,
     get_open_session,
+    get_cash_session_breakdown,
     list_cash_deposits,
     open_session,
     record_cash_deposit,
@@ -45,7 +46,10 @@ def list_cash_sessions(
 
 @router.get("/current", response_model=CashSessionRead | None)
 def current_session(db: Session = Depends(get_db), user: User = Depends(require_cashier)):
-    return get_open_session(db, user.shop_id)
+    session = get_open_session(db, user.shop_id)
+    if session is None:
+        return None
+    return {**session.__dict__, **get_cash_session_breakdown(db, session)}
 
 
 @router.get("/deposits", response_model=CashDepositSummary)

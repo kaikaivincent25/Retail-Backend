@@ -33,6 +33,10 @@ class CashSession(TimestampMixin, Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     opening_cash: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    cash_sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cash_collections_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cash_expenses_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    credit_sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     closing_cash: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     expected_cash: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     difference: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
