@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     MPESA_BILLING_CALLBACK_URL: str = ""
     MPESA_TRANSACTION_TYPE: str = "CustomerPayBillOnline"
 
+    # Optional notification providers. Leave blank to keep events in the outbox only.
+    WHATSAPP_PROVIDER: str = "placeholder"
+    WHATSAPP_API_URL: str = ""
+    WHATSAPP_API_TOKEN: str = ""
+    WHATSAPP_FROM_NUMBER: str = ""
+    SMS_PROVIDER: str = "placeholder"
+    SMS_API_URL: str = ""
+    SMS_API_TOKEN: str = ""
+    SMS_FROM_NAME: str = ""
+
     _normalize_database_urls = field_validator("DATABASE_URL", "TEST_DATABASE_URL", mode="before")(
         normalize_database_url
     )

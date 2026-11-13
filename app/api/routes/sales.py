@@ -247,6 +247,10 @@ def cancel_manual_mpesa_sale(
 def mpesa_callback(payload: dict, db: Session = Depends(get_db)):
     try:
         processed = process_stk_callback(db, payload)
+        if not processed:
+            from app.api.routes.customer_orders import process_order_mpesa_callback
+
+            processed = process_order_mpesa_callback(db, payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except AccountingError as exc:

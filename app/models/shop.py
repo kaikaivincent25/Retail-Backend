@@ -7,10 +7,14 @@ from app.models.mixins import TimestampMixin
 
 class Shop(TimestampMixin, Base):
     __tablename__ = "shops"
-    __table_args__ = (UniqueConstraint("name", name="uq_shops_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_shops_name"),
+        UniqueConstraint("slug", name="uq_shops_slug"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
+    slug: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     currency: Mapped[str] = mapped_column(
         String(3), default="KES", server_default="KES", nullable=False

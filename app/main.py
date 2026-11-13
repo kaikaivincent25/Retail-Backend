@@ -21,6 +21,8 @@ from app.api.routes import (
     health,
     inventory,
     products,
+    public_catalog,
+    customer_orders,
     reports,
     sales,
     shop,
@@ -112,6 +114,9 @@ app.include_router(billing.router)
 app.include_router(platform.router)
 app.include_router(expenses.router)
 app.include_router(products.router)
+app.include_router(public_catalog.router)
+app.include_router(customer_orders.public_router)
+app.include_router(customer_orders.private_router)
 app.include_router(sales.router)
 app.include_router(cash_sessions.router)
 app.include_router(customers.router)

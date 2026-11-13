@@ -36,6 +36,7 @@ def complete_sale(
     due_date: date | None = None,
     initial_payment: Decimal | None = None,
     initial_payment_method: PaymentMethod | None = None,
+    allow_confirmed_mpesa: bool = False,
 ) -> Sale:
     try:
         if is_credit:
@@ -59,7 +60,9 @@ def complete_sale(
                 raise SaleError("Initial payment cannot be negative")
             if init_amt > 0 and initial_payment_method is None:
                 initial_payment_method = PaymentMethod.CASH
-        elif payment_method != PaymentMethod.CASH:
+        elif payment_method != PaymentMethod.CASH and not (
+            payment_method == PaymentMethod.MPESA and allow_confirmed_mpesa
+        ):
             raise SaleError("M-Pesa payments must use the STK Push checkout flow")
         # Lock variants in a stable order so concurrent checkouts cannot oversell.
         variant_ids = {entry["variant_id"] for entry in items}

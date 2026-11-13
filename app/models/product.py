@@ -26,3 +26,10 @@ class Product(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False, index=True
+    )
+    public_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    public_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    public_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    availability_message: Mapped[str | None] = mapped_column(String(255), nullable=True)

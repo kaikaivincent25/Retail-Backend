@@ -51,6 +51,11 @@ def create_product(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
+    if payload.is_public and not payload.variants:
+        raise HTTPException(
+            status_code=422,
+            detail="A public product must have at least one sellable variant",
+        )
     ensure_name_free(db, user.shop_id, payload.name)
     variant_names = [variant.name for variant in payload.variants]
     if len(variant_names) != len(set(variant_names)):
@@ -255,11 +260,22 @@ def update_product(
 ):
     product = get_product_or_404(db, product_id, user.shop_id)
 
+    if payload.is_public is True and not db.scalar(
+        select(Variant.id).where(Variant.product_id == product.id, Variant.is_active.is_(True))
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="A public product must have at least one active sellable variant",
+        )
+
     # Explicit nulls are only allowed for category (to clear it)
     data = {
         k: v
         for k, v in payload.model_dump(exclude_unset=True).items()
-        if v is not None or k in {"category", "brand", "description", "attributes", "image_url"}
+        if v is not None or k in {
+            "category", "brand", "description", "attributes", "image_url",
+            "public_name", "public_description", "public_image_url", "availability_message",
+        }
     }
 
     if "name" in data:

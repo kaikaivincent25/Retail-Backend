@@ -41,6 +41,11 @@ class ProductCreate(BaseModel):
     description: Description | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
     image_url: ImageUrl | None = None
+    is_public: bool = False
+    public_name: Name | None = None
+    public_description: Description | None = None
+    public_image_url: ImageUrl | None = None
+    availability_message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
     variants: list[VariantCreate] = Field(default_factory=list)
 
     @field_validator("attributes")
@@ -57,6 +62,11 @@ class ProductUpdate(BaseModel):
     attributes: dict[str, str] | None = None
     image_url: ImageUrl | None = None
     is_active: bool | None = None
+    is_public: bool | None = None
+    public_name: Name | None = None
+    public_description: Description | None = None
+    public_image_url: ImageUrl | None = None
+    availability_message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)] | None = None
 
     @field_validator("attributes")
     @classmethod
@@ -76,6 +86,40 @@ class ProductRead(BaseModel):
     brand: str | None = None
     description: str | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
+    is_public: bool = False
+    public_name: str | None = None
+    public_description: str | None = None
+    public_image_url: str | None = None
+    availability_message: str | None = None
+
+
+class PublicVariantRead(BaseModel):
+    id: int
+    name: str
+    unit: str
+    sale_mode: str
+    selling_price: Decimal
+    is_available: bool
+
+
+class PublicProductRead(BaseModel):
+    id: int
+    name: str
+    category: str | None = None
+    brand: str | None = None
+    description: str | None = None
+    image_url: str | None = None
+    availability_message: str | None = None
+    variants: list[PublicVariantRead] = Field(default_factory=list)
+
+
+class PublicShopRead(BaseModel):
+    name: str
+    slug: str
+    location: str | None = None
+    currency: str
+    business_type: str
+    products: list[PublicProductRead] = Field(default_factory=list)
 
 
 class ProductWithVariantsRead(ProductRead):

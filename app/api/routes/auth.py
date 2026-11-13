@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +25,16 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 logger = logging.getLogger(__name__)
 
 
+def make_shop_slug(name: str, db: Session) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "shop"
+    slug = base
+    suffix = 2
+    while db.scalar(select(Shop.id).where(Shop.slug == slug)) is not None:
+        slug = f"{base}-{suffix}"
+        suffix += 1
+    return slug
+
+
 @router.post("/signup", response_model=Token, status_code=201)
 def signup(payload: ShopSignup, db: Session = Depends(get_db)):
     if db.scalar(select(Shop).where(Shop.name == payload.shop_name)):
@@ -40,6 +51,7 @@ def signup(payload: ShopSignup, db: Session = Depends(get_db)):
 
     shop = Shop(
         name=payload.shop_name,
+        slug=make_shop_slug(payload.shop_name, db),
         location=payload.shop_location,
         currency="KES",
         business_type=payload.business_type,

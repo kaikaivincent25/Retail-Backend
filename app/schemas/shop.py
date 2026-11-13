@@ -25,6 +25,7 @@ class ShopRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    slug: str | None
     location: str | None
     currency: str
     business_type: str
