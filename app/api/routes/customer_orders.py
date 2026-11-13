@@ -152,8 +152,10 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
         f"{shop.name}: order {order.order_number} was received. We will confirm it shortly.",
     )
     db.commit()
-    db.refresh(order)
-    return _public_order(order)
+    saved_order = db.scalar(_order_query(order.id))
+    if saved_order is None:
+        raise HTTPException(status_code=500, detail="The order was created but could not be loaded for confirmation")
+    return _public_order(saved_order)
 
 
 @public_router.get("/orders/{public_token}", response_model=PublicOrderRead)
