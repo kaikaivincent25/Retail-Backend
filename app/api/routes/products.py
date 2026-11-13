@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import String, case, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_cashier, require_manager
@@ -88,26 +89,41 @@ def create_product(
             detail="One or more variant barcodes are already in use in this shop",
         )
 
-    product = Product(
-        shop_id=user.shop_id,
-        **payload.model_dump(exclude={"variants"}),
-    )
-    db.add(product)
-    db.flush()
-
-    variants = [
-        Variant(
-            product_id=product.id,
-            cost_price_is_known=variant.cost_price > 0,
-            **variant.model_dump(),
+    try:
+        product = Product(
+            shop_id=user.shop_id,
+            **payload.model_dump(exclude={"variants"}),
         )
-        for variant in payload.variants
-    ]
-    db.add_all(variants)
-    db.commit()
-    db.refresh(product)
-    for variant in variants:
-        db.refresh(variant)
+        db.add(product)
+        db.flush()
+
+        variants = [
+            Variant(
+                product_id=product.id,
+                cost_price_is_known=variant.cost_price > 0,
+                **variant.model_dump(),
+            )
+            for variant in payload.variants
+        ]
+        db.add_all(variants)
+        db.commit()
+        db.refresh(product)
+        for variant in variants:
+            db.refresh(variant)
+    except IntegrityError as exc:
+        db.rollback()
+        # Keep database constraints from becoming an unhelpful blank/500
+        # response if two requests race while creating the same catalog data.
+        constraint = str(getattr(exc.orig, "diag", None) or exc.orig).lower()
+        if "uq_products_shop_name" in constraint or "products_shop_name" in constraint:
+            raise HTTPException(status_code=409, detail="A product with this name already exists") from exc
+        if "uq_variants_product_name" in constraint:
+            raise HTTPException(status_code=409, detail="Variant names must be unique within a product") from exc
+        if "sku" in constraint:
+            raise HTTPException(status_code=409, detail="One or more variant SKUs are already in use") from exc
+        if "barcode" in constraint:
+            raise HTTPException(status_code=409, detail="One or more variant barcodes are already in use in this shop") from exc
+        raise HTTPException(status_code=422, detail="The product could not be saved. Check the supplied values.") from exc
     return ProductWithVariantsRead(
         **ProductRead.model_validate(product).model_dump(),
         variants=[VariantRead.model_validate(variant) for variant in variants],
