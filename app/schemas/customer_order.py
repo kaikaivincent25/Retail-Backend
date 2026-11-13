@@ -34,6 +34,8 @@ class CustomerOrderCreate(BaseModel):
             raise ValueError("Add a delivery address, estate, or landmark")
         if self.fulfilment == OrderFulfilment.PICKUP and self.payment_method == OrderPaymentMethod.PAY_ON_DELIVERY:
             raise ValueError("Choose pay at pickup for pickup orders")
+        if self.fulfilment == OrderFulfilment.DELIVERY and self.payment_method == OrderPaymentMethod.PAY_AT_PICKUP:
+            raise ValueError("Choose pay on delivery or M-Pesa for delivery orders")
         return self
 
 
