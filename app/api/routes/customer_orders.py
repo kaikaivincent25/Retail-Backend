@@ -89,6 +89,12 @@ def _order_number(shop: Shop, order_id: int) -> str:
     return f"{prefix}-{1000 + order_id}"
 
 
+def _pending_order_number(shop: Shop) -> str:
+    """Return a valid number for the initial INSERT before the database assigns an id."""
+    prefix = re.sub(r"[^A-Z0-9]", "", (shop.slug or shop.name).upper())[:2] or "SH"
+    return f"{prefix}-P{secrets.token_hex(5).upper()}"
+
+
 @public_router.post("/shops/{slug}/orders", response_model=PublicOrderRead, status_code=status.HTTP_201_CREATED)
 def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session = Depends(get_db)):
     expire_reservations(db)
@@ -126,9 +132,14 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
             line_total=line_total,
         ))
 
+    public_token = secrets.token_urlsafe(32)
     order = CustomerOrder(
         shop_id=shop.id,
-        public_token=secrets.token_urlsafe(32),
+        # order_number is non-null, but the final human-readable number uses
+        # the database id. Insert a short unique placeholder first, then
+        # replace it once the id has been allocated.
+        order_number=_pending_order_number(shop),
+        public_token=public_token,
         fulfilment=payload.fulfilment,
         payment_method=payload.payment_method,
         customer_name=payload.customer_name.strip(),
