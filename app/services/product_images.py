@@ -94,7 +94,13 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
             if isinstance(payload, dict) and isinstance(payload.get("message"), str):
                 provider_message = " ".join(payload["message"].split())
                 provider_message = provider_message.replace(service_key, "[redacted]")
-                if provider_message:
+                if "related resource does not exist" in provider_message.lower():
+                    detail = (
+                        "Supabase Storage could not find the requested bucket. Verify that "
+                        "PRODUCT_IMAGE_BUCKET exactly matches a bucket in the project identified "
+                        "by SUPABASE_URL."
+                    )
+                elif provider_message:
                     detail += f" Supabase says: {provider_message[:200]}"
         elif status_code == 413:
             detail = "Supabase Storage rejected the upload request because it is too large (HTTP 413)."

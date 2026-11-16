@@ -152,6 +152,30 @@ def test_bad_request_includes_storage_message_without_echoing_backend_key(monkey
     assert service_key not in str(error.value)
 
 
+def test_missing_storage_resource_points_to_bucket_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "legacy-service-role-jwt")
+    monkeypatch.setattr(settings, "SUPABASE_STORAGE_AUTH_TOKEN", "")
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+
+    def fake_post(url, **kwargs):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"message": "The related resource does not exist"},
+        )
+        raise httpx.HTTPStatusError("Storage request failed", request=request, response=response)
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    with pytest.raises(ProductImageStorageError) as error:
+        create_signed_product_image_upload(42, "image/png")
+
+    assert "PRODUCT_IMAGE_BUCKET" in str(error.value)
+    assert "SUPABASE_URL" in str(error.value)
+
+
 def test_signed_upload_requires_server_storage_configuration(monkeypatch):
     monkeypatch.setattr(settings, "SUPABASE_URL", "")
     monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "")
