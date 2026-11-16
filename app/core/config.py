@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     # Optional AI assistant. Leave blank to keep the application fully local.
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_FALLBACK_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_MAX_ATTEMPTS: int = 3
 
     _normalize_database_urls = field_validator("DATABASE_URL", "TEST_DATABASE_URL", mode="before")(
         normalize_database_url

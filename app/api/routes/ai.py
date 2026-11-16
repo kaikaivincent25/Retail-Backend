@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,48 @@ def provider_error(exc: httpx.HTTPStatusError) -> str:
     return f"Gemini API error ({exc.response.status_code}){f': {detail}' if detail else ''}"
 
 
+async def generate_ai_json(prompt: str) -> dict:
+    """Call Gemini with bounded retries and a lightweight fallback model."""
+    models = [settings.GEMINI_MODEL, settings.GEMINI_FALLBACK_MODEL]
+    last_error = None
+    for model in dict.fromkeys(model for model in models if model):
+        for attempt in range(settings.GEMINI_MAX_ATTEMPTS):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            body = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 1200,
+                    "responseMimeType": "application/json",
+                },
+            }
+            response = None
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.post(url, params={"key": settings.GEMINI_API_KEY}, json=body)
+                    response.raise_for_status()
+                    return parse_ai_json(response.json())
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                if exc.response.status_code not in {429, 500, 502, 503, 504}:
+                    raise
+            except httpx.RequestError as exc:
+                last_error = exc
+
+            if attempt < settings.GEMINI_MAX_ATTEMPTS - 1:
+                retry_after = response.headers.get("Retry-After") if response is not None else None
+                try:
+                    delay = min(float(retry_after), 8) if retry_after else min(2 ** attempt * 2, 8)
+                except ValueError:
+                    delay = min(2 ** attempt * 2, 8)
+                await asyncio.sleep(delay)
+        logger.warning("Gemini model %s remained unavailable after retries; trying fallback.", model)
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No Gemini model is configured")
+
+
 @router.get("/status")
 def ai_status(user: User = Depends(require_manager)):
     return {"available": bool(settings.GEMINI_API_KEY), "provider": "gemini" if settings.GEMINI_API_KEY else None}
@@ -76,17 +119,8 @@ async def product_import_suggestions(
         "suggested_category, suggested_description, duplicate_with, confidence (0 to 1), and reason.\n\n"
         f"Products:\n{json.dumps(payload.model_dump(), ensure_ascii=False)}"
     )
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
-    }
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(url, params={"key": settings.GEMINI_API_KEY}, json=body)
-            response.raise_for_status()
-            data = response.json()
-        parsed = parse_ai_json(data)
+        parsed = await generate_ai_json(prompt)
         return ProductImportAiResponse.model_validate(parsed)
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
@@ -170,17 +204,8 @@ async def business_assistant(
         "Return JSON only with an answer string and an actions array containing at most three short suggested next steps.\n\n"
         f"Shop context:\n{json.dumps(context, ensure_ascii=False)}\n\nUser question:\n{payload.question.strip()}"
     )
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"},
-    }
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(url, params={"key": settings.GEMINI_API_KEY}, json=body)
-            response.raise_for_status()
-            data = response.json()
-        return BusinessAssistantResponse.model_validate(parse_ai_json(data))
+        return BusinessAssistantResponse.model_validate(await generate_ai_json(prompt))
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
     except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
