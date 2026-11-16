@@ -23,6 +23,7 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
 
     supabase_url = settings.SUPABASE_URL.strip().rstrip("/")
     service_key = settings.SUPABASE_SERVICE_ROLE_KEY.strip()
+    storage_auth_token = settings.SUPABASE_STORAGE_AUTH_TOKEN.strip()
     bucket = settings.PRODUCT_IMAGE_BUCKET.strip()
     missing_settings = [
         name
@@ -40,6 +41,17 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
             + "."
         )
 
+    if service_key.startswith("sb_secret_"):
+        jwt_parts = storage_auth_token.split(".")
+        if len(jwt_parts) != 3 or not all(jwt_parts):
+            raise ProductImageStorageError(
+                "Supabase Storage needs a compact JWT in its Authorization header. "
+                "Set SUPABASE_STORAGE_AUTH_TOKEN to the legacy service_role JWT, "
+                "or use that JWT for SUPABASE_SERVICE_ROLE_KEY."
+            )
+    elif not storage_auth_token:
+        storage_auth_token = service_key
+
     path = f"shops/{shop_id}/products/{uuid4().hex}.{IMAGE_EXTENSIONS[content_type]}"
     encoded_bucket = quote(bucket, safe="")
     encoded_path = quote(path, safe="/")
@@ -48,7 +60,7 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
     try:
         headers = {
             "apikey": service_key,
-            "Authorization": f"Bearer {service_key}",
+            "Authorization": f"Bearer {storage_auth_token}",
         }
         response = httpx.post(
             f"{storage_url}/object/upload/sign/{encoded_bucket}/{encoded_path}",

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_STORAGE_AUTH_TOKEN: str = ""
     PRODUCT_IMAGE_BUCKET: str = "products-images"
 
     MPESA_BASE_URL: str = "https://sandbox.safaricom.co.ke"
