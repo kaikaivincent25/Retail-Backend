@@ -46,9 +46,10 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
     storage_url = f"{supabase_url}/storage/v1"
 
     try:
-        headers = {"apikey": service_key}
-        if not service_key.startswith("sb_secret_"):
-            headers["Authorization"] = f"Bearer {service_key}"
+        headers = {
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+        }
         response = httpx.post(
             f"{storage_url}/object/upload/sign/{encoded_bucket}/{encoded_path}",
             headers=headers,
