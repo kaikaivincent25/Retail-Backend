@@ -25,3 +25,12 @@ class ProductImportAiSuggestion(BaseModel):
 
 class ProductImportAiResponse(BaseModel):
     suggestions: list[ProductImportAiSuggestion] = Field(default_factory=list)
+
+
+class BusinessAssistantRequest(BaseModel):
+    question: str = Field(min_length=2, max_length=1000)
+
+
+class BusinessAssistantResponse(BaseModel):
+    answer: str
+    actions: list[str] = Field(default_factory=list)
