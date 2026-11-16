@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -24,6 +25,32 @@ from app.schemas.ai import (
 )
 
 router = APIRouter(prefix="/ai", tags=["AI assistant"])
+logger = logging.getLogger(__name__)
+
+
+def parse_ai_json(data: dict) -> dict:
+    candidates = data.get("candidates") or []
+    if not candidates:
+        block_reason = data.get("promptFeedback", {}).get("blockReason")
+        raise ValueError(f"Gemini returned no candidates{f' ({block_reason})' if block_reason else ''}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text = next((part.get("text") for part in parts if part.get("text")), None)
+    if not text:
+        finish_reason = candidates[0].get("finishReason", "unknown")
+        raise ValueError(f"Gemini returned no text (finish reason: {finish_reason})")
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        cleaned = cleaned.rsplit("```", 1)[0].strip()
+    return json.loads(cleaned)
+
+
+def provider_error(exc: httpx.HTTPStatusError) -> str:
+    try:
+        detail = exc.response.json().get("error", {}).get("message")
+    except (ValueError, json.JSONDecodeError):
+        detail = None
+    return f"Gemini API error ({exc.response.status_code}){f': {detail}' if detail else ''}"
 
 
 @router.get("/status")
@@ -59,11 +86,13 @@ async def product_import_suggestions(
             response = await client.post(url, params={"key": settings.GEMINI_API_KEY}, json=body)
             response.raise_for_status()
             data = response.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        parsed = json.loads(text)
+        parsed = parse_ai_json(data)
         return ProductImportAiResponse.model_validate(parsed)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
     except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="The AI assistant could not return valid suggestions. Try again.") from exc
+        logger.exception("Gemini product-import response could not be parsed")
+        raise HTTPException(status_code=502, detail=f"AI returned an unreadable response: {exc}") from exc
 
 
 def money(value: Decimal | int | float | None) -> float:
@@ -151,7 +180,9 @@ async def business_assistant(
             response = await client.post(url, params={"key": settings.GEMINI_API_KEY}, json=body)
             response.raise_for_status()
             data = response.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return BusinessAssistantResponse.model_validate(json.loads(text))
+        return BusinessAssistantResponse.model_validate(parse_ai_json(data))
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
     except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="The business assistant could not return a valid answer. Try again.") from exc
+        logger.exception("Gemini business-assistant response could not be parsed")
+        raise HTTPException(status_code=502, detail=f"AI returned an unreadable response: {exc}") from exc
