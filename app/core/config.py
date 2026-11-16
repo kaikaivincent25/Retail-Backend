@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     SMS_API_TOKEN: str = ""
     SMS_FROM_NAME: str = ""
 
+    # Optional AI assistant. Leave blank to keep the application fully local.
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+
     _normalize_database_urls = field_validator("DATABASE_URL", "TEST_DATABASE_URL", mode="before")(
         normalize_database_url
     )

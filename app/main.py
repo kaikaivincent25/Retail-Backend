@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes import (
     audit,
     accounting,
+    ai,
     auth,
     billing,
     platform,
@@ -107,6 +108,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(audit.router)
 app.include_router(accounting.router)
+app.include_router(ai.router)
 app.include_router(inventory.router)
 app.include_router(variants.router)
 app.include_router(auth.router)
