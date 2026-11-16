@@ -1,4 +1,5 @@
 import pytest
+import httpx
 
 from app.core.config import settings
 from app.services.product_images import (
@@ -69,6 +70,31 @@ def test_new_supabase_secret_key_is_not_sent_as_a_bearer_jwt(monkeypatch):
 
     assert calls["headers"]["apikey"] == "sb_secret_test-key"
     assert "Authorization" not in calls["headers"]
+
+
+@pytest.mark.parametrize(
+    ("status_code", "message"),
+    [
+        (401, "backend key"),
+        (404, "PRODUCT_IMAGE_BUCKET"),
+    ],
+)
+def test_storage_http_errors_explain_common_configuration_failures(
+    monkeypatch, status_code, message
+):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test-key")
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+
+    def fake_post(url, **kwargs):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(status_code, request=request)
+        raise httpx.HTTPStatusError("Storage request failed", request=request, response=response)
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    with pytest.raises(ProductImageStorageError, match=message):
+        create_signed_product_image_upload(42, "image/png")
 
 
 def test_signed_upload_requires_server_storage_configuration(monkeypatch):

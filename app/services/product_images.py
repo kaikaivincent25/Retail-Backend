@@ -60,8 +60,33 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
         signed_path = payload.get("url") if isinstance(payload, dict) else None
         if not isinstance(signed_path, str) or not signed_path:
             raise ProductImageStorageError("Supabase Storage returned an invalid upload URL.")
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if status_code in {401, 403}:
+            detail = (
+                f"Supabase Storage rejected the backend key (HTTP {status_code}). "
+                "Check the secret key configured for this Supabase project."
+            )
+        elif status_code == 404:
+            detail = (
+                "Supabase Storage returned HTTP 404. Check that SUPABASE_URL is the "
+                "project URL and PRODUCT_IMAGE_BUCKET matches an existing bucket."
+            )
+        elif status_code == 413:
+            detail = "Supabase Storage rejected the upload request because it is too large (HTTP 413)."
+        elif status_code == 429:
+            detail = "Supabase Storage is receiving too many requests. Wait a moment and try again (HTTP 429)."
+        else:
+            detail = f"Supabase Storage rejected the upload request (HTTP {status_code})."
+        raise ProductImageStorageError(detail) from exc
+    except httpx.RequestError as exc:
+        raise ProductImageStorageError(
+            "The backend could not connect to Supabase Storage. Check the project URL and backend network access."
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ProductImageStorageError("Supabase Storage could not prepare the image upload.") from exc
+        raise ProductImageStorageError(
+            "The backend could not prepare the Supabase Storage upload."
+        ) from exc
     except ValueError as exc:
         if isinstance(exc, ProductImageStorageError):
             raise
