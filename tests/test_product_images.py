@@ -53,9 +53,27 @@ def test_signed_upload_rejects_unsupported_content_type(monkeypatch):
         create_signed_product_image_upload(42, "image/svg+xml")
 
 
+def test_new_supabase_secret_key_is_not_sent_as_a_bearer_jwt(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "sb_secret_test-key")
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+    calls = {}
+
+    def fake_post(url, **kwargs):
+        calls["headers"] = kwargs["headers"]
+        return FakeStorageResponse()
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    create_signed_product_image_upload(42, "image/png")
+
+    assert calls["headers"]["apikey"] == "sb_secret_test-key"
+    assert "Authorization" not in calls["headers"]
+
+
 def test_signed_upload_requires_server_storage_configuration(monkeypatch):
     monkeypatch.setattr(settings, "SUPABASE_URL", "")
     monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "")
 
-    with pytest.raises(ProductImageStorageError, match="not configured"):
+    with pytest.raises(ProductImageStorageError, match="SUPABASE_URL"):
         create_signed_product_image_upload(42, "image/png")

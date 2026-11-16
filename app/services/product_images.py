@@ -24,8 +24,21 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
     supabase_url = settings.SUPABASE_URL.strip().rstrip("/")
     service_key = settings.SUPABASE_SERVICE_ROLE_KEY.strip()
     bucket = settings.PRODUCT_IMAGE_BUCKET.strip()
-    if not supabase_url or not service_key or not bucket:
-        raise ProductImageStorageError("Product image storage is not configured.")
+    missing_settings = [
+        name
+        for name, value in (
+            ("SUPABASE_URL", supabase_url),
+            ("SUPABASE_SERVICE_ROLE_KEY", service_key),
+            ("PRODUCT_IMAGE_BUCKET", bucket),
+        )
+        if not value
+    ]
+    if missing_settings:
+        raise ProductImageStorageError(
+            "Product image storage is not configured. Set these backend settings: "
+            + ", ".join(missing_settings)
+            + "."
+        )
 
     path = f"shops/{shop_id}/products/{uuid4().hex}.{IMAGE_EXTENSIONS[content_type]}"
     encoded_bucket = quote(bucket, safe="")
@@ -33,12 +46,12 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
     storage_url = f"{supabase_url}/storage/v1"
 
     try:
+        headers = {"apikey": service_key}
+        if not service_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {service_key}"
         response = httpx.post(
             f"{storage_url}/object/upload/sign/{encoded_bucket}/{encoded_path}",
-            headers={
-                "apikey": service_key,
-                "Authorization": f"Bearer {service_key}",
-            },
+            headers=headers,
             json={},
             timeout=15,
         )
