@@ -72,6 +72,17 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
                 "Supabase Storage returned HTTP 404. Check that SUPABASE_URL is the "
                 "project URL and PRODUCT_IMAGE_BUCKET matches an existing bucket."
             )
+        elif status_code == 400:
+            detail = "Supabase Storage rejected the upload request (HTTP 400)."
+            try:
+                payload = exc.response.json()
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict) and isinstance(payload.get("message"), str):
+                provider_message = " ".join(payload["message"].split())
+                provider_message = provider_message.replace(service_key, "[redacted]")
+                if provider_message:
+                    detail += f" Supabase says: {provider_message[:200]}"
         elif status_code == 413:
             detail = "Supabase Storage rejected the upload request because it is too large (HTTP 413)."
         elif status_code == 429:

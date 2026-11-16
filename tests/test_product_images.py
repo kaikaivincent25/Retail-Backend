@@ -97,6 +97,31 @@ def test_storage_http_errors_explain_common_configuration_failures(
         create_signed_product_image_upload(42, "image/png")
 
 
+def test_bad_request_includes_storage_message_without_echoing_backend_key(monkeypatch):
+    service_key = "sb_secret_test-key"
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", service_key)
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+
+    def fake_post(url, **kwargs):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"message": f"Invalid upload configuration: {service_key}"},
+        )
+        raise httpx.HTTPStatusError("Storage request failed", request=request, response=response)
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    with pytest.raises(ProductImageStorageError) as error:
+        create_signed_product_image_upload(42, "image/png")
+
+    assert "HTTP 400" in str(error.value)
+    assert "Invalid upload configuration: [redacted]" in str(error.value)
+    assert service_key not in str(error.value)
+
+
 def test_signed_upload_requires_server_storage_configuration(monkeypatch):
     monkeypatch.setattr(settings, "SUPABASE_URL", "")
     monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "")
