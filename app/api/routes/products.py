@@ -24,6 +24,73 @@ from app.schemas.product import (
 router = APIRouter(prefix="/products", tags=["Products"])
 
 
+def validate_product_payloads(
+    db: Session, shop_id: int, payloads: list[ProductCreate]
+) -> None:
+    """Validate a batch before anything is written to the database."""
+    names = [payload.name for payload in payloads]
+    if len(names) != len(set(names)):
+        raise HTTPException(status_code=409, detail="Product names must be unique in the CSV")
+
+    existing_names = db.scalars(
+        select(Product.name).where(Product.shop_id == shop_id, Product.name.in_(names))
+    ).all()
+    if existing_names:
+        raise HTTPException(
+            status_code=409,
+            detail=f"These products already exist: {', '.join(existing_names[:5])}",
+        )
+
+    variant_names = [variant.name for payload in payloads for variant in payload.variants]
+    if len(variant_names) != len(set(variant_names)):
+        # Variant names only need to be unique within each product; this check
+        # is intentionally handled below with the product name as context.
+        for payload in payloads:
+            names_for_product = [variant.name for variant in payload.variants]
+            if len(names_for_product) != len(set(names_for_product)):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Variant names must be unique for '{payload.name}'",
+                )
+
+    skus = [variant.sku for payload in payloads for variant in payload.variants if variant.sku]
+    if len(skus) != len(set(skus)) or any(
+        db.scalar(select(Variant).where(Variant.sku == sku)) for sku in skus
+    ):
+        raise HTTPException(status_code=409, detail="One or more variant SKUs are already in use")
+
+    barcodes = [variant.barcode for payload in payloads for variant in payload.variants if variant.barcode]
+    if len(barcodes) != len(set(barcodes)) or (
+        barcodes
+        and db.scalar(
+            select(Variant.id)
+            .join(Product)
+            .where(Product.shop_id == shop_id, Variant.barcode.in_(barcodes))
+            .limit(1)
+        )
+    ):
+        raise HTTPException(status_code=409, detail="One or more variant barcodes are already in use in this shop")
+
+    for payload in payloads:
+        if payload.is_public and not payload.variants:
+            raise HTTPException(status_code=422, detail=f"'{payload.name}' needs at least one variant to be public")
+
+
+def persist_product_payload(db: Session, shop_id: int, payload: ProductCreate) -> Product:
+    product = Product(shop_id=shop_id, **payload.model_dump(exclude={"variants"}))
+    db.add(product)
+    db.flush()
+    db.add_all([
+        Variant(
+            product_id=product.id,
+            cost_price_is_known=variant.cost_price > 0,
+            **variant.model_dump(),
+        )
+        for variant in payload.variants
+    ])
+    return product
+
+
 def get_product_or_404(db: Session, product_id: int, shop_id: int) -> Product:
     product = db.scalar(
         select(Product).where(Product.id == product_id, Product.shop_id == shop_id)
@@ -128,6 +195,29 @@ def create_product(
         **ProductRead.model_validate(product).model_dump(),
         variants=[VariantRead.model_validate(variant) for variant in variants],
     )
+
+
+@router.post("/bulk", status_code=status.HTTP_201_CREATED)
+def bulk_create_products(
+    payloads: list[ProductCreate],
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    """Create approved CSV products atomically."""
+    if not payloads:
+        raise HTTPException(status_code=422, detail="The import contains no products")
+    if len(payloads) > 1000:
+        raise HTTPException(status_code=422, detail="Import up to 1,000 products at a time")
+
+    validate_product_payloads(db, user.shop_id, payloads)
+    try:
+        products = [persist_product_payload(db, user.shop_id, item) for item in payloads]
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="The import contains a duplicate product, SKU, or barcode") from exc
+
+    return {"created": len(products)}
 
 @router.get("/popular", response_model=list[PopularVariant])
 def popular_products(
