@@ -176,6 +176,34 @@ def test_missing_storage_resource_points_to_bucket_configuration(monkeypatch):
     assert "SUPABASE_URL" in str(error.value)
 
 
+def test_invalid_storage_jwt_points_to_project_key_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(
+        settings,
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "eyJheader.eyJpayload.signature",
+    )
+    monkeypatch.setattr(settings, "SUPABASE_STORAGE_AUTH_TOKEN", "")
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+
+    def fake_post(url, **kwargs):
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            400,
+            request=request,
+            json={"message": "signature verification failed"},
+        )
+        raise httpx.HTTPStatusError("Storage request failed", request=request, response=response)
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    with pytest.raises(ProductImageStorageError) as error:
+        create_signed_product_image_upload(42, "image/png")
+
+    assert "SUPABASE_SERVICE_ROLE_KEY" in str(error.value)
+    assert "same project as SUPABASE_URL" in str(error.value)
+
+
 def test_signed_upload_requires_server_storage_configuration(monkeypatch):
     monkeypatch.setattr(settings, "SUPABASE_URL", "")
     monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "")

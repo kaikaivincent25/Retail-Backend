@@ -100,6 +100,18 @@ def create_signed_product_image_upload(shop_id: int, content_type: str) -> dict[
                         "PRODUCT_IMAGE_BUCKET exactly matches a bucket in the project identified "
                         "by SUPABASE_URL."
                     )
+                elif "signature verification failed" in provider_message.lower():
+                    auth_setting = (
+                        "SUPABASE_STORAGE_AUTH_TOKEN"
+                        if service_key.startswith("sb_secret_")
+                        else "SUPABASE_SERVICE_ROLE_KEY"
+                    )
+                    detail = (
+                        "Supabase could not verify the Storage Authorization JWT. Confirm that "
+                        f"{auth_setting} is the current legacy service_role JWT from the same "
+                        "project as SUPABASE_URL. If the project's JWT signing secret was rotated, "
+                        "retrieve the current service_role key from Supabase API Keys settings."
+                    )
                 elif provider_message:
                     detail += f" Supabase says: {provider_message[:200]}"
         elif status_code == 413:
