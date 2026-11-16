@@ -1,0 +1,61 @@
+import pytest
+
+from app.core.config import settings
+from app.services.product_images import (
+    ProductImageStorageError,
+    create_signed_product_image_upload,
+)
+
+
+class FakeStorageResponse:
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {
+            "url": "/object/upload/sign/products-images/shops/42/products/photo.jpg?token=upload-token"
+        }
+
+
+def test_signed_upload_uses_a_shop_scoped_storage_path(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://shop-project.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "server-secret")
+    monkeypatch.setattr(settings, "PRODUCT_IMAGE_BUCKET", "products-images")
+    calls = {}
+
+    def fake_post(url, **kwargs):
+        calls["url"] = url
+        calls["kwargs"] = kwargs
+        return FakeStorageResponse()
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", fake_post)
+
+    result = create_signed_product_image_upload(42, "image/jpeg")
+
+    assert "/shops/42/products/" in calls["url"]
+    assert calls["kwargs"]["headers"]["Authorization"] == "Bearer server-secret"
+    assert result["upload_url"] == (
+        "https://shop-project.supabase.co/storage/v1"
+        "/object/upload/sign/products-images/shops/42/products/photo.jpg?token=upload-token"
+    )
+    assert result["image_url"].startswith(
+        "https://shop-project.supabase.co/storage/v1/object/public/products-images/shops/42/products/"
+    )
+
+
+def test_signed_upload_rejects_unsupported_content_type(monkeypatch):
+    def unexpected_post(*args, **kwargs):
+        pytest.fail("Storage must not be contacted for an unsupported image type")
+
+    monkeypatch.setattr("app.services.product_images.httpx.post", unexpected_post)
+
+    with pytest.raises(ValueError, match="JPG, PNG, or WebP"):
+        create_signed_product_image_upload(42, "image/svg+xml")
+
+
+def test_signed_upload_requires_server_storage_configuration(monkeypatch):
+    monkeypatch.setattr(settings, "SUPABASE_URL", "")
+    monkeypatch.setattr(settings, "SUPABASE_SERVICE_ROLE_KEY", "")
+
+    with pytest.raises(ProductImageStorageError, match="not configured"):
+        create_signed_product_image_upload(42, "image/png")

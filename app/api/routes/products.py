@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import String, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -15,13 +17,35 @@ from app.schemas.bulk_preset import BulkPresetRead
 from app.schemas.product import (
     PopularVariant,
     ProductCreate,
+    ProductImageUploadRead,
+    ProductImageUploadRequest,
     ProductRead,
     ProductUpdate,
     ProductWithVariantsRead,
     VariantRead,
 )
+from app.services.product_images import (
+    ProductImageStorageError,
+    create_signed_product_image_upload,
+)
 
 router = APIRouter(prefix="/products", tags=["Products"])
+logger = logging.getLogger(__name__)
+
+
+@router.post("/image-upload", response_model=ProductImageUploadRead)
+def create_product_image_upload(
+    payload: ProductImageUploadRequest,
+    user: User = Depends(require_manager),
+):
+    try:
+        return create_signed_product_image_upload(user.shop_id, payload.content_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ProductImageStorageError as exc:
+        logger.exception("Could not prepare product image upload for shop %s", user.shop_id)
+        status_code = 503 if "not configured" in str(exc).lower() else 502
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 def validate_product_payloads(

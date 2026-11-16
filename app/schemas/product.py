@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -72,6 +72,15 @@ class ProductUpdate(BaseModel):
     @classmethod
     def attributes_are_bounded(cls, value):
         return validate_attributes(value)
+
+
+class ProductImageUploadRequest(BaseModel):
+    content_type: Literal["image/jpeg", "image/png", "image/webp"]
+
+
+class ProductImageUploadRead(BaseModel):
+    upload_url: str
+    image_url: str
 
 
 class ProductRead(BaseModel):
