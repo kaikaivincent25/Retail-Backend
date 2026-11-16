@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+from app.models.user import UserRole
 
 
 class PlatformShopRead(BaseModel):
@@ -36,3 +38,20 @@ class PlatformActivityRead(BaseModel):
     action: str
     description: str | None
     created_at: datetime
+
+
+class PlatformUserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    shop_id: int
+    full_name: str
+    username: str
+    role: UserRole
+    is_active: bool
+
+
+class PlatformUserUpdate(BaseModel):
+    full_name: str | None = None
+    role: UserRole | None = None
+    is_active: bool | None = None

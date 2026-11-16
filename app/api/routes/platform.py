@@ -13,7 +13,14 @@ from app.models.platform import PlatformAuditLog, PlatformUser
 from app.models.shop import Shop
 from app.models.user import User
 from app.schemas.auth import Token
-from app.schemas.platform import PlatformActivityRead, PlatformOverview, PlatformShopRead
+from app.schemas.platform import (
+    PlatformActivityRead,
+    PlatformOverview,
+    PlatformShopRead,
+    PlatformUserRead,
+    PlatformUserUpdate,
+)
+from app.models.user import UserRole
 from app.services.billing import current_status, utc_now
 
 router = APIRouter(prefix="/platform", tags=["Platform"])
@@ -126,6 +133,53 @@ def shop_activity(
         )
         for entry, shop_name, username in rows
     ]
+
+
+@router.get("/shops/{shop_id}/users", response_model=list[PlatformUserRead])
+def shop_users(
+    shop_id: int,
+    db: Session = Depends(get_db),
+    _: PlatformUser = Depends(require_platform_owner),
+):
+    if db.get(Shop, shop_id) is None:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    return db.scalars(
+        select(User).where(User.shop_id == shop_id).order_by(User.full_name.asc())
+    ).all()
+
+
+@router.patch("/shops/{shop_id}/users/{user_id}", response_model=PlatformUserRead)
+def update_shop_user(
+    shop_id: int,
+    user_id: int,
+    payload: PlatformUserUpdate,
+    db: Session = Depends(get_db),
+    platform_user: PlatformUser = Depends(require_platform_owner),
+):
+    user = db.scalar(select(User).where(User.id == user_id, User.shop_id == shop_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found in this shop")
+    if payload.is_active is False and user.role == UserRole.ADMIN:
+        admin_count = db.scalar(
+            select(func.count(User.id)).where(
+                User.shop_id == shop_id, User.role == UserRole.ADMIN, User.is_active.is_(True)
+            )
+        ) or 0
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="The last active shop admin cannot be deactivated")
+    changes = payload.model_dump(exclude_unset=True)
+    for field, value in changes.items():
+        setattr(user, field, value)
+    description = "Updated shop user: " + ", ".join(f"{field}={value}" for field, value in changes.items())
+    db.add(PlatformAuditLog(
+        platform_user_id=platform_user.id,
+        shop_id=shop_id,
+        action="shop_user_updated",
+        description=description[:255],
+    ))
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 @router.post("/shops/{shop_id}/suspend", status_code=204)
