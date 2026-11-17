@@ -12,10 +12,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_cashier, require_manager
 from app.core.config import settings
 from app.core.database import get_db
+from app.models.cash_session import CashSession, SessionStatus
+from app.models.customer import Customer
 from app.models.customer_order import CustomerOrder
 from app.models.customer_payment import CustomerPayment
+from app.models.expense import Expense
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem, SaleStatus
+from app.models.shop import Shop
 from app.models.user import User
 from app.models.variant import Variant
 from app.schemas.ai import (
@@ -27,6 +31,19 @@ from app.schemas.ai import (
 
 router = APIRouter(prefix="/ai", tags=["AI assistant"])
 logger = logging.getLogger(__name__)
+
+SOFTWARE_GUIDE = (
+    "This is a multi-shop retail point-of-sale and shop-management system. "
+    "Staff can use the sales checkout for cash, M-Pesa, configured Pochi/till/paybill "
+    "payments, and customer credit; manage products and variants, prices, barcodes, "
+    "stock levels and reorder thresholds; keep customer and credit-payment records; "
+    "record expenses and open/close shop-wide cash sessions with cash reconciliation; "
+    "and review sales history, reports, accounting, inventory activity, and staff access. "
+    "Shops can optionally publish products in a storefront and manage customer orders "
+    "for pickup or delivery. In-store checkout supports offline use and later sync. "
+    "Which controls are available can depend on the user's role and the shop's setup. "
+    "Use the supplied live shop data only for figures explicitly included below."
+)
 
 
 def parse_ai_json(data: dict) -> dict:
@@ -135,6 +152,20 @@ def money(value: Decimal | int | float | None) -> float:
 
 def build_shop_context(db: Session, shop_id: int) -> dict:
     since = datetime.now(timezone.utc) - timedelta(days=30)
+    shop = db.get(Shop, shop_id)
+    catalog = db.execute(
+        select(
+            func.count(func.distinct(Product.id)),
+            func.count(func.distinct(Variant.id)),
+            func.coalesce(func.sum(Variant.quantity), 0),
+            func.count(func.distinct(Product.category)),
+        )
+        .outerjoin(
+            Variant,
+            (Variant.product_id == Product.id) & Variant.is_active.is_(True),
+        )
+        .where(Product.shop_id == shop_id, Product.is_active.is_(True))
+    ).one()
     completed_sales = db.execute(
         select(func.count(Sale.id), func.coalesce(func.sum(Sale.total), 0))
         .where(Sale.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED, Sale.created_at >= since)
@@ -151,6 +182,11 @@ def build_shop_context(db: Session, shop_id: int) -> dict:
         .group_by(SaleItem.variant_name)
         .order_by(desc(func.sum(SaleItem.quantity)))
         .limit(10)
+    ).all()
+    payment_totals = db.execute(
+        select(Sale.payment_method, func.count(Sale.id), func.sum(Sale.total))
+        .where(Sale.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED, Sale.created_at >= since)
+        .group_by(Sale.payment_method)
     ).all()
     low_stock = db.execute(
         select(Product.name, Variant.name, Variant.quantity, Variant.reorder_level)
@@ -169,6 +205,19 @@ def build_shop_context(db: Session, shop_id: int) -> dict:
         .where(CustomerOrder.shop_id == shop_id)
         .group_by(CustomerOrder.status)
     ).all()
+    active_customers = db.scalar(
+        select(func.count(Customer.id)).where(
+            Customer.shop_id == shop_id, Customer.is_active.is_(True)
+        )
+    )
+    expense_totals = db.execute(
+        select(Expense.category, func.sum(Expense.amount))
+        .join(User, User.id == Expense.user_id)
+        .where(User.shop_id == shop_id, Expense.created_at >= since)
+        .group_by(Expense.category)
+        .order_by(desc(func.sum(Expense.amount)))
+        .limit(10)
+    ).all()
     credit_sales = db.scalar(
         select(func.coalesce(func.sum(Sale.total), 0)).where(
             Sale.shop_id == shop_id, Sale.is_credit.is_(True), Sale.status == SaleStatus.COMPLETED
@@ -177,13 +226,69 @@ def build_shop_context(db: Session, shop_id: int) -> dict:
     credit_payments = db.scalar(
         select(func.coalesce(func.sum(CustomerPayment.amount), 0)).where(CustomerPayment.shop_id == shop_id)
     )
+    open_cash_session = db.execute(
+        select(CashSession).where(
+            CashSession.shop_id == shop_id,
+            CashSession.status == SessionStatus.OPEN,
+        )
+    ).scalar_one_or_none()
     return {
-        "period": "last 30 days",
-        "sales": {"transaction_count": completed_sales[0], "revenue_kes": money(completed_sales[1]), "units_sold": int(quantity_sold or 0)},
-        "top_products": [{"variant": row[0], "units": int(row[1] or 0), "sales_kes": money(row[2])} for row in top_products],
+        "shop_profile": {
+            "name": shop.name,
+            "business_type": shop.business_type,
+            "currency": shop.currency,
+        },
+        "catalog": {
+            "active_products": int(catalog[0] or 0),
+            "active_variants": int(catalog[1] or 0),
+            "units_in_stock": int(catalog[2] or 0),
+            "categories_in_use": int(catalog[3] or 0),
+            "active_customers": int(active_customers or 0),
+        },
+        "sales_period": "last 30 days",
+        "sales": {"transaction_count": completed_sales[0], "revenue": money(completed_sales[1]), "units_sold": int(quantity_sold or 0)},
+        "top_products": [{"variant": row[0], "units": int(row[1] or 0), "sales": money(row[2])} for row in top_products],
+        "sales_by_payment_method": {
+            row[0].value: {"transaction_count": int(row[1]), "sales": money(row[2])}
+            for row in payment_totals
+        },
         "low_stock": [{"product": row[0], "variant": row[1], "stock": int(row[2]), "reorder_level": int(row[3])} for row in low_stock],
-        "online_orders_by_status": {str(row[0].value): row[1] for row in order_counts},
-        "credit_summary": {"credit_sales_kes": money(credit_sales), "recorded_payments_kes": money(credit_payments)},
+        "online_orders_all_time_by_status": {str(row[0].value): row[1] for row in order_counts},
+        "expenses_last_30_days_by_category": {
+            str(row[0]): money(row[1]) for row in expense_totals
+        },
+        "open_cash_session": (
+            {
+                "opening_cash": money(open_cash_session.opening_cash),
+                "cash_sales": (
+                    money(open_cash_session.cash_sales_total)
+                    if open_cash_session.cash_sales_total is not None
+                    else None
+                ),
+                "cash_collections": (
+                    money(open_cash_session.cash_collections_total)
+                    if open_cash_session.cash_collections_total is not None
+                    else None
+                ),
+                "cash_expenses": (
+                    money(open_cash_session.cash_expenses_total)
+                    if open_cash_session.cash_expenses_total is not None
+                    else None
+                ),
+                "expected_cash": (
+                    money(open_cash_session.expected_cash)
+                    if open_cash_session.expected_cash is not None
+                    else None
+                ),
+            }
+            if open_cash_session
+            else None
+        ),
+        "credit_summary_all_time": {
+            "credit_sales": money(credit_sales),
+            "recorded_payments": money(credit_payments),
+            "note": "These are all-time totals, not an invoice-level outstanding balance.",
+        },
     }
 
 
@@ -198,10 +303,15 @@ async def business_assistant(
 
     context = build_shop_context(db, user.shop_id)
     prompt = (
-        "You are a careful retail business assistant. Answer the user's question using only the supplied shop context. "
-        "Do not invent numbers, products, customers, or recommendations. If the context is insufficient, say so. "
-        "Use Kenyan shillings (KSh) when discussing money. Keep the answer concise and practical. "
+        "You are a careful assistant for the retail shop-management software described below. "
+        "Use the software guide to answer general questions about what the application does or how "
+        "its workflows fit together. Use shop context only for shop-specific facts and metrics. "
+        "Do not invent numbers, products, customers, features, or recommendations. If the supplied "
+        "context is insufficient, say what is missing. Respect metric periods and distinguish "
+        "all-time totals from current balances. Use KSh for KES amounts and otherwise use the "
+        "configured shop currency. Keep the answer concise and practical. "
         "Return JSON only with an answer string and an actions array containing at most three short suggested next steps.\n\n"
+        f"Software guide:\n{SOFTWARE_GUIDE}\n\n"
         f"Shop context:\n{json.dumps(context, ensure_ascii=False)}\n\nUser question:\n{payload.question.strip()}"
     )
     try:
