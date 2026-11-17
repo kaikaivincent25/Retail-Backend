@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -8,16 +8,23 @@ from app.core.database import get_db
 from app.models.shop import Shop
 from app.models.activity_log import ActivityLog
 from app.models.accounting import Account, JournalEntry, JournalLine
+from app.models.billing import BillingPayment
 from app.models.bulk_preset import BulkPreset
 from app.models.cash_deposit import CashDeposit
 from app.models.cash_session import CashSession
 from app.models.customer import Customer
+from app.models.customer_order import CustomerOrder, CustomerOrderItem
+from app.models.customer_payment import CustomerPayment
 from app.models.expense import Expense
+from app.models.notification import NotificationEvent
+from app.models.order_reservation import OrderReservation
 from app.models.product import Product
 from app.models.sale import Sale, SaleItem
+from app.models.stock_lot import StockLot, StockLotAllocation
 from app.models.stock_movement import StockMovement
 from app.models.user import User
 from app.models.variant import Variant
+from app.models.variant_price_history import VariantPriceHistory
 from app.core.security import verify_password
 from app.schemas.shop import (
     PaymentDestinationRead,
@@ -178,11 +185,42 @@ def delete_shop(
         JournalEntry.shop_id == shop.id
     )
     shop_sales = select(Sale.id).where(Sale.shop_id == shop.id)
+    shop_orders = select(CustomerOrder.id).where(CustomerOrder.shop_id == shop.id)
     shop_products = select(Product.id).where(Product.shop_id == shop.id)
     shop_variants = select(Variant.id).where(Variant.product_id.in_(shop_products))
+    shop_stock_movements = select(StockMovement.id).where(
+        StockMovement.variant_id.in_(shop_variants)
+    )
+    shop_sale_items = select(SaleItem.id).where(SaleItem.sale_id.in_(shop_sales))
 
     try:
         # Remove dependent records first. All predicates are scoped to this tenant.
+        db.execute(delete(NotificationEvent).where(NotificationEvent.shop_id == shop.id))
+        db.execute(
+            delete(OrderReservation).where(
+                or_(
+                    OrderReservation.order_id.in_(shop_orders),
+                    OrderReservation.variant_id.in_(shop_variants),
+                )
+            )
+        )
+        db.execute(
+            delete(CustomerOrderItem).where(CustomerOrderItem.order_id.in_(shop_orders))
+        )
+        db.execute(delete(CustomerOrder).where(CustomerOrder.shop_id == shop.id))
+        db.execute(delete(CustomerPayment).where(CustomerPayment.shop_id == shop.id))
+        db.execute(delete(BillingPayment).where(BillingPayment.shop_id == shop.id))
+        db.execute(
+            delete(StockLotAllocation).where(
+                or_(
+                    StockLotAllocation.lot_id.in_(
+                        select(StockLot.id).where(StockLot.variant_id.in_(shop_variants))
+                    ),
+                    StockLotAllocation.stock_movement_id.in_(shop_stock_movements),
+                    StockLotAllocation.sale_item_id.in_(shop_sale_items),
+                )
+            )
+        )
         db.execute(delete(SaleItem).where(SaleItem.sale_id.in_(shop_sales)))
         db.execute(delete(Sale).where(Sale.shop_id == shop.id))
         db.execute(
@@ -196,7 +234,13 @@ def delete_shop(
         db.execute(delete(CashDeposit).where(CashDeposit.shop_id == shop.id))
         db.execute(delete(Expense).where(Expense.user_id.in_(shop_users)))
         db.execute(delete(StockMovement).where(StockMovement.variant_id.in_(shop_variants)))
+        db.execute(delete(StockLot).where(StockLot.variant_id.in_(shop_variants)))
         db.execute(delete(BulkPreset).where(BulkPreset.variant_id.in_(shop_variants)))
+        db.execute(
+            delete(VariantPriceHistory).where(
+                VariantPriceHistory.variant_id.in_(shop_variants)
+            )
+        )
         db.execute(delete(Variant).where(Variant.product_id.in_(shop_products)))
         db.execute(delete(Product).where(Product.shop_id == shop.id))
         db.execute(delete(CashSession).where(CashSession.shop_id == shop.id))
