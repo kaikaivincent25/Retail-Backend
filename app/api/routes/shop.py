@@ -91,6 +91,33 @@ def update_shop(
         select(Shop).where(Shop.id == user.shop_id).with_for_update()
     )
 
+    schedule = {
+        "breakfast_start_minute": (
+            payload.breakfast_start_minute
+            if payload.breakfast_start_minute is not None
+            else shop.breakfast_start_minute
+        ),
+        "breakfast_end_minute": (
+            payload.breakfast_end_minute
+            if payload.breakfast_end_minute is not None
+            else shop.breakfast_end_minute
+        ),
+        "evening_start_minute": (
+            payload.evening_start_minute
+            if payload.evening_start_minute is not None
+            else shop.evening_start_minute
+        ),
+    }
+    if not (
+        schedule["breakfast_start_minute"]
+        < schedule["breakfast_end_minute"]
+        < schedule["evening_start_minute"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Sales schedule must have breakfast start before breakfast end and evening start",
+        )
+
     if payload.name and payload.name != shop.name:
         if db.scalar(select(Shop).where(Shop.name == payload.name, Shop.id != shop.id)):
             raise HTTPException(
@@ -114,6 +141,9 @@ def update_shop(
         shop.currency = payload.currency
     if "business_type" in payload.model_fields_set and payload.business_type:
         shop.business_type = payload.business_type
+    for field in schedule:
+        if field in payload.model_fields_set:
+            setattr(shop, field, schedule[field])
     for field in PAYMENT_DESTINATION_FIELDS & payload.model_fields_set:
         setattr(shop, field, getattr(payload, field))
 

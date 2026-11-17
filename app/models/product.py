@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -9,6 +9,10 @@ class Product(TimestampMixin, Base):
     __tablename__ = "products"
     __table_args__ = (
         UniqueConstraint("shop_id", "name", name="uq_products_shop_name"),
+        CheckConstraint(
+            "sales_group IS NULL OR sales_group IN ('breakfast', 'everyday', 'evening')",
+            name="ck_products_sales_group",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -17,6 +21,7 @@ class Product(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    sales_group: Mapped[str | None] = mapped_column(String(20), nullable=True)
     brand: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     attributes: Mapped[dict[str, str]] = mapped_column(

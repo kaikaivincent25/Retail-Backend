@@ -11,6 +11,7 @@ Category = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
 ImageUrl = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
 Brand = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 Description = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+SalesGroup = Literal["breakfast", "everyday", "evening"]
 
 
 def validate_attributes(value: dict[str, str] | None) -> dict[str, str]:
@@ -37,6 +38,7 @@ def validate_attributes(value: dict[str, str] | None) -> dict[str, str]:
 class ProductCreate(BaseModel):
     name: Name
     category: Category | None = None
+    sales_group: SalesGroup | None = None
     brand: Brand | None = None
     description: Description | None = None
     attributes: dict[str, str] = Field(default_factory=dict)
@@ -57,6 +59,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: Name | None = None
     category: Category | None = None
+    sales_group: SalesGroup | None = None
     brand: Brand | None = None
     description: Description | None = None
     attributes: dict[str, str] | None = None
@@ -90,6 +93,7 @@ class ProductRead(BaseModel):
     shop_id: int
     name: str
     category: str | None
+    sales_group: SalesGroup | None = None
     image_url: str | None
     is_active: bool
     brand: str | None = None
@@ -154,6 +158,7 @@ class VariantBrowseResult(BaseModel):
     variant_name: str
     product_id: int
     product_name: str
+    sales_group: SalesGroup | None = None
     image_url: str | None = None
     unit: str
     sale_mode: str

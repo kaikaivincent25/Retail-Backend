@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BUSINESS_TYPES = {
     "general_retail", "household_retail", "bookshop", "electronics", "clothing", "cosmetics"
@@ -29,6 +29,9 @@ class ShopRead(BaseModel):
     location: str | None
     currency: str
     business_type: str
+    breakfast_start_minute: int
+    breakfast_end_minute: int
+    evening_start_minute: int
     mpesa_pochi_number: str | None
     mpesa_till_number: str | None
     mpesa_paybill_number: str | None
@@ -41,6 +44,9 @@ class ShopReceiptRead(BaseModel):
     name: str
     location: str | None
     business_type: str
+    breakfast_start_minute: int
+    breakfast_end_minute: int
+    evening_start_minute: int
 
 
 class PaymentDestinationRead(BaseModel):
@@ -55,6 +61,9 @@ class ShopUpdate(BaseModel):
     location: str | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     business_type: str | None = None
+    breakfast_start_minute: int | None = Field(default=None, ge=0, lt=1440)
+    breakfast_end_minute: int | None = Field(default=None, ge=0, lt=1440)
+    evening_start_minute: int | None = Field(default=None, ge=0, lt=1440)
     mpesa_pochi_number: str | None = Field(default=None, max_length=50)
     mpesa_till_number: str | None = Field(default=None, max_length=50)
     mpesa_paybill_number: str | None = Field(default=None, max_length=50)
@@ -79,6 +88,24 @@ class ShopUpdate(BaseModel):
         if value is not None and value not in BUSINESS_TYPES:
             raise ValueError("Unsupported business type")
         return value
+
+    @model_validator(mode="after")
+    def validate_complete_sales_schedule(self):
+        schedule_fields = (
+            self.breakfast_start_minute,
+            self.breakfast_end_minute,
+            self.evening_start_minute,
+        )
+        if all(value is not None for value in schedule_fields):
+            if not (
+                self.breakfast_start_minute
+                < self.breakfast_end_minute
+                < self.evening_start_minute
+            ):
+                raise ValueError(
+                    "Sales schedule must have breakfast start before breakfast end and evening start"
+                )
+        return self
 
 
 class ShopDeleteRequest(BaseModel):

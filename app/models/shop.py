@@ -22,6 +22,15 @@ class Shop(TimestampMixin, Base):
     business_type: Mapped[str] = mapped_column(
         String(40), default="general_retail", server_default="general_retail", nullable=False
     )
+    breakfast_start_minute: Mapped[int] = mapped_column(
+        default=360, server_default="360", nullable=False
+    )
+    breakfast_end_minute: Mapped[int] = mapped_column(
+        default=630, server_default="630", nullable=False
+    )
+    evening_start_minute: Mapped[int] = mapped_column(
+        default=960, server_default="960", nullable=False
+    )
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     mpesa_pochi_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     mpesa_till_number: Mapped[str | None] = mapped_column(String(50), nullable=True)

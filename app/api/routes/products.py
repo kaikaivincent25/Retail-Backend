@@ -403,7 +403,7 @@ def update_product(
         k: v
         for k, v in payload.model_dump(exclude_unset=True).items()
         if v is not None or k in {
-            "category", "brand", "description", "attributes", "image_url",
+            "category", "sales_group", "brand", "description", "attributes", "image_url",
             "public_name", "public_description", "public_image_url", "availability_message",
         }
     }
