@@ -50,8 +50,10 @@ def apply_stock_change(
 
     total_cost = Decimal("0.00")
     if delta > 0:
-        lot_cost = unit_cost_at_time or (
-            variant.cost_price if variant.cost_price_is_known else None
+        lot_cost = (
+            unit_cost_at_time
+            if unit_cost_at_time is not None
+            else (variant.cost_price if variant.cost_price_is_known else None)
         )
         if lot_cost is None:
             raise ValueError("A unit cost is required before adding stock")
@@ -99,6 +101,25 @@ def apply_stock_change(
 
     variant.quantity = new
     return StockChangeResult(movement=movement, total_cost=total_cost)
+
+
+def record_opening_stock(
+    db: Session,
+    variant: Variant,
+    quantity: int,
+    user_id: int,
+) -> None:
+    if quantity <= 0:
+        return
+    apply_stock_change(
+        db,
+        variant,
+        delta=quantity,
+        movement_type=MovementType.PURCHASE,
+        user_id=user_id,
+        reason="Opening stock from product import",
+        unit_cost_at_time=variant.cost_price,
+    )
 
 
 def restore_reserved_stock(

@@ -72,11 +72,24 @@ def inventory_costs(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
+    latest_purchase_cost = (
+        select(StockMovement.unit_cost_at_time)
+        .where(
+            StockMovement.variant_id == Variant.id,
+            StockMovement.movement_type == MovementType.PURCHASE,
+            StockMovement.quantity > 0,
+            StockMovement.unit_cost_at_time.is_not(None),
+        )
+        .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     query = (
         select(
             Variant.id,
             Variant.cost_price,
             Variant.cost_price_is_known,
+            latest_purchase_cost.label("latest_purchase_unit_cost"),
         )
         .join(Product)
         .where(Product.shop_id == user.shop_id, Variant.is_active.is_(True))
@@ -123,7 +136,22 @@ def adjust_stock(
                     status_code=422,
                     detail="Unit purchase cost is required when receiving stock (no recorded cost yet)",
                 )
-            payload.unit_cost = variant.cost_price
+            latest_purchase_cost = db.scalar(
+                select(StockMovement.unit_cost_at_time)
+                .where(
+                    StockMovement.variant_id == variant.id,
+                    StockMovement.movement_type == MovementType.PURCHASE,
+                    StockMovement.quantity > 0,
+                    StockMovement.unit_cost_at_time.is_not(None),
+                )
+                .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
+                .limit(1)
+            )
+            payload.unit_cost = (
+                latest_purchase_cost
+                if latest_purchase_cost is not None
+                else variant.cost_price
+            )
         if variant.quantity and not variant.cost_price_is_known:
             raise HTTPException(
                 status_code=422,
@@ -234,10 +262,17 @@ def variant_movements(
     get_owned_variant(db, variant_id, user.shop_id)  # 404s if not yours
 
     query = (
-        select(StockMovement)
+        select(StockMovement, User.full_name)
+        .join(User, User.id == StockMovement.user_id)
         .where(StockMovement.variant_id == variant_id)
-        .order_by(StockMovement.created_at.desc())
+        .order_by(StockMovement.created_at.desc(), StockMovement.id.desc())
         .offset(skip)
         .limit(limit)
     )
-    return db.scalars(query).all()
+    rows = db.execute(query).all()
+    result = []
+    for movement, user_name in rows:
+        movement_data = StockMovementRead.model_validate(movement).model_dump()
+        movement_data["user_name"] = user_name
+        result.append(StockMovementRead(**movement_data))
+    return result

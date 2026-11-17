@@ -35,6 +35,7 @@ class VariantStockRead(BaseModel):
     unit: Unit
     sale_mode: SaleMode
     quantity: int
+    selling_price: Decimal
     reorder_level: int
     is_active: bool
 
@@ -43,6 +44,7 @@ class VariantCostRead(BaseModel):
     id: int
     cost_price: Decimal
     cost_price_is_known: bool
+    latest_purchase_unit_cost: Decimal | None = None
 
 
 class StockMovementRead(BaseModel):
@@ -56,5 +58,6 @@ class StockMovementRead(BaseModel):
     new_quantity: int
     reason: str | None
     user_id: int
+    user_name: str | None = None
     created_at: datetime
     unit_cost_at_time: Decimal | None = None

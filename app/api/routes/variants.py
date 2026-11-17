@@ -10,11 +10,20 @@ from app.models.user import User
 from app.models.variant import Variant
 from app.models.sale import SaleItem
 from app.models.stock_movement import StockMovement
+from app.models.variant_price_history import VariantPriceHistory
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.schemas.bulk_preset import BulkPresetCreate, BulkPresetRead
 from app.schemas.product import VariantBrowseResult
-from app.schemas.variant import CostResolution, VariantCreate, VariantRead, VariantUpdate
+from app.schemas.variant import (
+    CostResolution,
+    VariantCreate,
+    VariantPriceHistoryRead,
+    VariantRead,
+    VariantUpdate,
+)
+from app.services.inventory import record_opening_stock
+from app.services.pricing import record_variant_price_change
 
 router = APIRouter(tags=["Variants"])
 
@@ -73,10 +82,13 @@ def create_variant(
     ):
         raise HTTPException(status_code=409, detail="Barcode is already in use in this shop")
 
-    variant_data = payload.model_dump()
-    variant_data["cost_price_is_known"] = "cost_price" in payload.model_fields_set
+    variant_data = payload.model_dump(exclude={"initial_quantity"})
+    variant_data["cost_price_is_known"] = payload.cost_price > 0
     variant = Variant(product_id=product_id, **variant_data)
     db.add(variant)
+    db.flush()
+    record_variant_price_change(db, variant, user.id, old_price=None)
+    record_opening_stock(db, variant, payload.initial_quantity, user.id)
     db.commit()
     db.refresh(variant)
     return variant
@@ -277,11 +289,19 @@ def update_variant(
     if variant is None:
         raise HTTPException(status_code=404, detail="Variant not found")
     cost_changed = "cost_price" in payload.model_fields_set and payload.cost_price is not None
+    old_selling_price = variant.selling_price
+    price_changed = (
+        "selling_price" in payload.model_fields_set
+        and payload.selling_price is not None
+        and payload.selling_price != old_selling_price
+    )
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         if value is None:
             continue
         setattr(variant, field, value)
+    if price_changed:
+        record_variant_price_change(db, variant, user.id, old_selling_price)
     if cost_changed:
         variant.cost_price_is_known = True
         log_activity(
@@ -296,6 +316,40 @@ def update_variant(
     db.commit()
     db.refresh(variant)
     return variant
+
+
+@router.get(
+    "/variants/{variant_id}/price-history",
+    response_model=list[VariantPriceHistoryRead],
+)
+def variant_price_history(
+    variant_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_manager),
+):
+    get_owned_variant(db, variant_id, user.shop_id)
+    rows = db.execute(
+        select(VariantPriceHistory, User.full_name)
+        .join(User, User.id == VariantPriceHistory.changed_by_user_id)
+        .where(VariantPriceHistory.variant_id == variant_id)
+        .order_by(VariantPriceHistory.created_at.desc(), VariantPriceHistory.id.desc())
+        .offset(skip)
+        .limit(limit)
+    ).all()
+    return [
+        VariantPriceHistoryRead(
+            id=history.id,
+            variant_id=history.variant_id,
+            old_price=history.old_price,
+            new_price=history.new_price,
+            changed_by_user_id=history.changed_by_user_id,
+            changed_by_name=full_name,
+            created_at=history.created_at,
+        )
+        for history, full_name in rows
+    ]
 
 
 @router.post("/variants/{variant_id}/resolve-missing-costs")

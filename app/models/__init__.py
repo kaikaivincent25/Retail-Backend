@@ -11,6 +11,7 @@ from app.models.stock_movement import MovementType, StockMovement
 from app.models.stock_lot import StockLot, StockLotAllocation
 from app.models.user import User, UserRole
 from app.models.variant import SaleMode, Unit, Variant
+from app.models.variant_price_history import VariantPriceHistory
 from app.models.activity_log import ActivityAction, ActivityLog, HIGH_RISK_ACTIONS
 from app.models.bulk_preset import BulkPreset
 from app.models.billing import BillingPayment, BillingPaymentStatus, BillingPlan, Subscription, SubscriptionStatus
@@ -25,7 +26,7 @@ __all__ = [
     "Account", "AccountType", "JournalEntry", "JournalLine",
     "CashDeposit", "CashSession", "Customer", "CustomerPayment", "DepositFrequency", "Expense", "MovementType", "PaymentMethod", "Product", "Sale",
     "SaleItem", "SaleMode", "SaleStatus", "SessionStatus", "Shop", "StockMovement",
-    "Unit", "User", "UserRole", "Variant", "ActivityAction", "ActivityLog", "HIGH_RISK_ACTIONS", "BulkPreset",
+    "Unit", "User", "UserRole", "Variant", "VariantPriceHistory", "ActivityAction", "ActivityLog", "HIGH_RISK_ACTIONS", "BulkPreset",
     "StockLot", "StockLotAllocation",
     "BillingPlan", "Subscription", "SubscriptionStatus",
     "PlatformAuditLog", "PlatformUser",

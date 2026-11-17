@@ -28,6 +28,8 @@ from app.services.product_images import (
     ProductImageStorageError,
     create_signed_product_image_upload,
 )
+from app.services.inventory import record_opening_stock
+from app.services.pricing import record_variant_price_change
 
 router = APIRouter(prefix="/products", tags=["Products"])
 logger = logging.getLogger(__name__)
@@ -100,18 +102,24 @@ def validate_product_payloads(
             raise HTTPException(status_code=422, detail=f"'{payload.name}' needs at least one variant to be public")
 
 
-def persist_product_payload(db: Session, shop_id: int, payload: ProductCreate) -> Product:
+def persist_product_payload(
+    db: Session, shop_id: int, payload: ProductCreate, user_id: int
+) -> Product:
     product = Product(shop_id=shop_id, **payload.model_dump(exclude={"variants"}))
     db.add(product)
     db.flush()
-    db.add_all([
-        Variant(
+    for variant_payload in payload.variants:
+        variant = Variant(
             product_id=product.id,
-            cost_price_is_known=variant.cost_price > 0,
-            **variant.model_dump(),
+            cost_price_is_known=variant_payload.cost_price > 0,
+            **variant_payload.model_dump(exclude={"initial_quantity"}),
         )
-        for variant in payload.variants
-    ])
+        db.add(variant)
+        db.flush()
+        record_variant_price_change(db, variant, user_id, old_price=None)
+        record_opening_stock(
+            db, variant, variant_payload.initial_quantity, user_id
+        )
     return product
 
 
@@ -192,11 +200,17 @@ def create_product(
             Variant(
                 product_id=product.id,
                 cost_price_is_known=variant.cost_price > 0,
-                **variant.model_dump(),
+                **variant.model_dump(exclude={"initial_quantity"}),
             )
             for variant in payload.variants
         ]
         db.add_all(variants)
+        db.flush()
+        for variant_payload, variant in zip(payload.variants, variants):
+            record_variant_price_change(db, variant, user.id, old_price=None)
+            record_opening_stock(
+                db, variant, variant_payload.initial_quantity, user.id
+            )
         db.commit()
         db.refresh(product)
         for variant in variants:
@@ -235,7 +249,10 @@ def bulk_create_products(
 
     validate_product_payloads(db, user.shop_id, payloads)
     try:
-        products = [persist_product_payload(db, user.shop_id, item) for item in payloads]
+        products = [
+            persist_product_payload(db, user.shop_id, item, user.id)
+            for item in payloads
+        ]
         db.commit()
     except IntegrityError as exc:
         db.rollback()

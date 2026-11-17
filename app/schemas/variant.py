@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -15,6 +16,7 @@ class VariantCreate(BaseModel):
     unit_quantity: int = Field(default=1, ge=1)
     selling_price: Decimal = Field(ge=0)
     cost_price: Decimal = Field(default=Decimal("0"), ge=0)
+    initial_quantity: int = Field(default=0, ge=0, le=1_000_000_000)
     sku: str | None = None
     barcode: str | None = Field(default=None, max_length=64)
 
@@ -29,6 +31,8 @@ class VariantCreate(BaseModel):
     def bulk_unit_quantity_is_one(self):
         if self.sale_mode == SaleMode.BULK and self.unit_quantity != 1:
             raise ValueError("unit_quantity must be 1 for bulk (measured) variants")
+        if self.initial_quantity > 0 and self.cost_price <= 0:
+            raise ValueError("A positive unit cost is required for opening stock")
         return self
 
 
@@ -58,4 +62,14 @@ class VariantRead(BaseModel):
     sku: str | None
     barcode: str | None = None
     is_active: bool
+
+
+class VariantPriceHistoryRead(BaseModel):
+    id: int
+    variant_id: int
+    old_price: Decimal | None = None
+    new_price: Decimal
+    changed_by_user_id: int
+    changed_by_name: str
+    created_at: datetime
 
