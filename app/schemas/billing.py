@@ -21,6 +21,7 @@ class BillingRead(BaseModel):
     status: SubscriptionStatus
     trial_ends_at: datetime | None
     trial_used: bool
+    canceled_at: datetime | None
     current_period_start: datetime
     current_period_end: datetime
     grace_period_ends_at: datetime | None

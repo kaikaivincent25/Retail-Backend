@@ -44,6 +44,7 @@ from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.services.notifications import queue_order_notification
 from app.services.customer_identity import normalize_customer_phone
+from app.services.billing import require_feature
 from app.schemas.customer_order import (
     CustomerOrderCreate,
     CustomerOrderRead,
@@ -59,6 +60,7 @@ def _get_public_shop(db: Session, slug: str) -> Shop:
     shop = db.scalar(select(Shop).where(Shop.slug == slug, Shop.is_suspended.is_(False)))
     if shop is None:
         raise HTTPException(status_code=404, detail="Shop not found")
+    require_feature(db, shop.id, "online_store")
     return shop
 
 

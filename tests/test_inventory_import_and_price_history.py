@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -20,6 +21,7 @@ from app.models import (
     Variant,
     VariantPriceHistory,
 )
+from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 
 
 @pytest.fixture
@@ -40,6 +42,22 @@ def inventory_client() -> Generator[tuple[TestClient, sessionmaker[Session]], No
         shop = Shop(name="Inventory Import Test Shop", slug="inventory-import-test")
         db.add(shop)
         db.flush()
+        plan = BillingPlan(
+            code="business",
+            name="Business",
+            monthly_price=999,
+            features={"inventory.reports": True, "online_store": True},
+        )
+        db.add(plan)
+        db.flush()
+        now = datetime.now(timezone.utc)
+        db.add(Subscription(
+            shop_id=shop.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        ))
         manager = User(
             shop_id=shop.id,
             full_name="Inventory Manager",

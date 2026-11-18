@@ -8,10 +8,24 @@ from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 from app.models.user import User
 
 TRIAL_DAYS = 45
+MANAGEABLE_FEATURES = frozenset({
+    "audit.logs",
+    "expenses",
+    "inventory.reports",
+    "mpesa.tools",
+    "online_store",
+    "reports.full",
+})
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def get_subscription(db: Session, shop_id: int):
@@ -26,18 +40,18 @@ def get_subscription(db: Session, shop_id: int):
 
 
 def current_status(subscription: Subscription, now: datetime | None = None) -> SubscriptionStatus:
-    now = now or utc_now()
+    now = _as_utc(now or utc_now())
     if subscription.status == SubscriptionStatus.CANCELED:
         return SubscriptionStatus.CANCELED
     if subscription.status == SubscriptionStatus.TRIALING:
-        if subscription.trial_ends_at and now <= subscription.trial_ends_at:
+        if subscription.trial_ends_at and now <= _as_utc(subscription.trial_ends_at):
             return SubscriptionStatus.TRIALING
-        if subscription.grace_period_ends_at and now <= subscription.grace_period_ends_at:
+        if subscription.grace_period_ends_at and now <= _as_utc(subscription.grace_period_ends_at):
             return SubscriptionStatus.PAST_DUE
         return SubscriptionStatus.EXPIRED
-    if now <= subscription.current_period_end:
+    if now <= _as_utc(subscription.current_period_end):
         return subscription.status
-    if subscription.grace_period_ends_at and now <= subscription.grace_period_ends_at:
+    if subscription.grace_period_ends_at and now <= _as_utc(subscription.grace_period_ends_at):
         return SubscriptionStatus.PAST_DUE
     return SubscriptionStatus.EXPIRED
 
@@ -56,6 +70,11 @@ def require_feature(db: Session, shop_id: int, feature_key: str) -> None:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail="Optional services are suspended for this shop. Open Billing to restore access.",
+        )
+    if feature_key in (subscription.suspended_features or []):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This feature has been suspended by the RIS platform administrator.",
         )
     if state in {SubscriptionStatus.EXPIRED, SubscriptionStatus.CANCELED}:
         raise HTTPException(

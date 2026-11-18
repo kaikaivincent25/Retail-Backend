@@ -20,6 +20,7 @@ from app.schemas.inventory import (
 from app.services.inventory import apply_stock_change
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
+from app.services.billing import require_feature
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 
@@ -72,6 +73,7 @@ def inventory_costs(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
+    require_feature(db, user.shop_id, "inventory.reports")
     latest_purchase_cost = (
         select(StockMovement.unit_cost_at_time)
         .where(

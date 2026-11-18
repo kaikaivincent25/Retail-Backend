@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from app.api.deps import get_current_user
 from app.core.database import Base, get_db
 from app.main import app
 from app.models import Customer, CustomerOrder, Product, Shop, Unit, User, UserRole, Variant
+from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 
 
 @pytest.fixture
@@ -31,6 +33,17 @@ def public_order_client() -> Generator[tuple[TestClient, int, sessionmaker], Non
         shop = Shop(name="Order Test Shop", slug="order-test")
         db.add(shop)
         db.flush()
+        plan = BillingPlan(code="business", name="Business", monthly_price=999, features={"online_store": True})
+        db.add(plan)
+        db.flush()
+        now = datetime.now(timezone.utc)
+        db.add(Subscription(
+            shop_id=shop.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        ))
         product = Product(
             shop_id=shop.id,
             name="Test Product",

@@ -15,13 +15,15 @@ from app.models.user import User
 from app.schemas.auth import Token
 from app.schemas.platform import (
     PlatformActivityRead,
+    PlatformFeatureSettingsRead,
+    PlatformFeatureSettingsUpdate,
     PlatformOverview,
     PlatformShopRead,
     PlatformUserRead,
     PlatformUserUpdate,
 )
 from app.models.user import UserRole
-from app.services.billing import current_status, utc_now
+from app.services.billing import MANAGEABLE_FEATURES, current_status, utc_now
 
 router = APIRouter(prefix="/platform", tags=["Platform"])
 
@@ -97,6 +99,10 @@ def shops(db: Session = Depends(get_db), _: PlatformUser = Depends(require_platf
         .group_by(Shop.id, Subscription.id, BillingPlan.name, Subscription.status, Subscription.trial_ends_at, latest_activity.c.last_activity_at)
         .order_by(Shop.created_at.desc())
     ).all()
+    plan_features = {
+        plan.id: plan.features
+        for plan in db.scalars(select(BillingPlan)).all()
+    }
     return [
         PlatformShopRead(
             id=shop.id, name=shop.name, business_type=shop.business_type,
@@ -106,9 +112,77 @@ def shops(db: Session = Depends(get_db), _: PlatformUser = Depends(require_platf
             active_users=int(user_count or 0),
             last_activity_at=last_activity_at, is_suspended=shop.is_suspended,
             service_suspended=subscription.service_suspended if subscription is not None else False,
+            features={
+                key: enabled
+                for key, enabled in (
+                    plan_features.get(subscription.plan_id, {}).items()
+                    if subscription is not None
+                    else []
+                )
+                if key in MANAGEABLE_FEATURES
+            },
+            suspended_features=(
+                [
+                    key for key in (subscription.suspended_features or [])
+                    if key in MANAGEABLE_FEATURES
+                    and plan_features.get(subscription.plan_id, {}).get(key, False)
+                ]
+                if subscription is not None
+                else []
+            ),
         )
         for shop, plan_name, subscription, user_count, last_activity_at in rows
     ]
+
+
+@router.patch("/shops/{shop_id}/features", response_model=PlatformFeatureSettingsRead)
+def update_shop_features(
+    shop_id: int,
+    payload: PlatformFeatureSettingsUpdate,
+    db: Session = Depends(get_db),
+    platform_user: PlatformUser = Depends(require_platform_owner),
+):
+    row = db.execute(
+        select(Subscription, BillingPlan)
+        .join(BillingPlan, BillingPlan.id == Subscription.plan_id)
+        .where(Subscription.shop_id == shop_id)
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Shop subscription not found")
+    subscription, plan = row
+    available_features = {
+        key for key, enabled in (plan.features or {}).items()
+        if enabled and key in MANAGEABLE_FEATURES
+    }
+    requested_features = set(payload.suspended_features)
+    unsupported_features = requested_features - available_features
+    if unsupported_features:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Features are not enabled on this shop's plan: {', '.join(sorted(unsupported_features))}",
+        )
+
+    previous_features = set(subscription.suspended_features or [])
+    subscription.suspended_features = sorted(requested_features)
+    changed_features = sorted(previous_features.symmetric_difference(requested_features))
+    db.add(PlatformAuditLog(
+        platform_user_id=platform_user.id,
+        shop_id=shop_id,
+        action="shop_features_updated",
+        description=(
+            f"Suspended features: {', '.join(sorted(requested_features)) or 'none'}; "
+            f"changed: {', '.join(changed_features) or 'none'}"
+        )[:255],
+    ))
+    db.commit()
+    return PlatformFeatureSettingsRead(
+        features={
+            key: enabled
+            for key, enabled in (plan.features or {}).items()
+            if key in MANAGEABLE_FEATURES
+        },
+        suspended_features=subscription.suspended_features or [],
+    )
 
 
 @router.get("/shops/{shop_id}/activity", response_model=list[PlatformActivityRead])

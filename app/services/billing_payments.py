@@ -101,6 +101,7 @@ def process_billing_stk_callback(db: Session, payload: dict[str, Any]) -> bool:
     subscription.plan_id = payment.plan_id
     subscription.status = SubscriptionStatus.ACTIVE
     subscription.trial_ends_at = None
+    subscription.canceled_at = None
     subscription.current_period_start = start
     subscription.current_period_end = start + timedelta(days=30)
     subscription.grace_period_ends_at = None

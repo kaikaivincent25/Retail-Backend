@@ -16,6 +16,17 @@ class PlatformShopRead(BaseModel):
     last_activity_at: datetime | None
     is_suspended: bool
     service_suspended: bool
+    features: dict[str, bool]
+    suspended_features: list[str]
+
+
+class PlatformFeatureSettingsRead(BaseModel):
+    features: dict[str, bool]
+    suspended_features: list[str]
+
+
+class PlatformFeatureSettingsUpdate(BaseModel):
+    suspended_features: list[str]
 
 
 class PlatformOverview(BaseModel):

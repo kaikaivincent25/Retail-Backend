@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.models.activity_log import ActivityLog
 from app.models.user import User
 from app.schemas.audit import ActivityLogRead
+from app.services.billing import require_feature
 
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
@@ -20,6 +21,7 @@ def list_activity(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
+    require_feature(db, user.shop_id, "audit.logs")
     query = select(ActivityLog).join(User, User.id == ActivityLog.user_id).where(
         User.shop_id == user.shop_id
     )

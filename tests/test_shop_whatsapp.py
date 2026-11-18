@@ -1,13 +1,17 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_platform_owner
 from app.core.database import Base, get_db
 from app.main import app
 from app.models import Shop, User, UserRole
+from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
+from app.models.platform import PlatformAuditLog, PlatformUser
 
 
 @pytest.fixture
@@ -24,6 +28,26 @@ def whatsapp_client():
     other_shop = Shop(name="Other WhatsApp Shop", slug="other-whatsapp-shop")
     db.add_all([shop, other_shop])
     db.flush()
+    plan = BillingPlan(code="business", name="Business", monthly_price=999, features={"online_store": True})
+    db.add(plan)
+    db.flush()
+    now = datetime.now(timezone.utc)
+    db.add_all([
+        Subscription(
+            shop_id=shop.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        ),
+        Subscription(
+            shop_id=other_shop.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.ACTIVE,
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        ),
+    ])
     admin = User(
         shop_id=shop.id,
         full_name="Shop Admin",
@@ -85,6 +109,34 @@ def test_shop_whatsapp_is_scoped_and_can_be_cleared(whatsapp_client):
     db.refresh(other_shop)
     assert shop.whatsapp_number == "+254701111111"
     assert other_shop.whatsapp_number is None
+
+
+def test_platform_owner_can_suspend_storefront_without_suspending_subscription(whatsapp_client):
+    client, db, shop, _, _, _, _ = whatsapp_client
+    platform_user = PlatformUser(
+        full_name="Platform Owner",
+        username="platform_feature_admin",
+        password_hash="unused",
+    )
+    db.add(platform_user)
+    db.commit()
+    app.dependency_overrides[require_platform_owner] = lambda: platform_user
+    try:
+        shops_response = client.get("/platform/shops")
+        assert shops_response.status_code == 200, shops_response.text
+        assert shops_response.json()[0]["features"]["online_store"] is True
+
+        response = client.patch(
+            f"/platform/shops/{shop.id}/features",
+            json={"suspended_features": ["online_store"]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["suspended_features"] == ["online_store"]
+        assert client.get(f"/public/shops/{shop.slug}").status_code == 402
+        assert db.query(PlatformAuditLog).filter_by(action="shop_features_updated").count() == 1
+    finally:
+        app.dependency_overrides.pop(require_platform_owner, None)
 
 
 @pytest.mark.parametrize("number", ["not-a-number", "123", "++254712345678"])

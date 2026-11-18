@@ -12,6 +12,7 @@ from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.schemas.expense import ExpenseCreate, ExpenseRead
 from app.services.cash_sessions import get_open_session
 from app.services.accounting import AccountingError, post_expense
+from app.services.billing import require_feature
 
 router = APIRouter(prefix="/expenses", tags=["Expenses"])
 
@@ -22,6 +23,7 @@ def create_expense(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
+    require_feature(db, user.shop_id, "expenses")
     open_session = get_open_session(db, user.shop_id, lock=True)
     if open_session is None:
         raise HTTPException(
@@ -80,6 +82,7 @@ def list_expenses(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
+    require_feature(db, user.shop_id, "expenses")
     query = (
         select(Expense, User.full_name)
         .join(User, User.id == Expense.user_id)
@@ -100,5 +103,6 @@ def my_expenses(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
+    require_feature(db, user.shop_id, "expenses")
     query = select(Expense).where(Expense.user_id == user.id).order_by(Expense.created_at.desc())
     return db.scalars(query).all()
