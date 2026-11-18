@@ -7,10 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from app.models.variant import SaleMode, Unit
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+ImageUrl = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
 
 
 class VariantCreate(BaseModel):
     name: Name
+    image_url: ImageUrl | None = None
     unit: Unit
     sale_mode: SaleMode = SaleMode.FIXED
     unit_quantity: int = Field(default=1, ge=1)
@@ -38,6 +40,7 @@ class VariantCreate(BaseModel):
 
 class VariantUpdate(BaseModel):
     name: Name | None = None
+    image_url: ImageUrl | None = None
     selling_price: Decimal | None = Field(default=None, ge=0)
     cost_price: Decimal | None = Field(default=None, ge=0)
     is_active: bool | None = None
@@ -53,6 +56,7 @@ class VariantRead(BaseModel):
     id: int
     product_id: int
     name: str
+    image_url: str | None = None
     unit: Unit
     sale_mode: SaleMode
     unit_quantity: int

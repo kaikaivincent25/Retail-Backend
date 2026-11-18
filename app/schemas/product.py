@@ -109,6 +109,7 @@ class ProductRead(BaseModel):
 class PublicVariantRead(BaseModel):
     id: int
     name: str
+    image_url: str | None = None
     unit: str
     sale_mode: str
     selling_price: Decimal

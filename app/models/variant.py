@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -61,6 +62,7 @@ class Variant(TimestampMixin, Base):
 
     # e.g. "Kabras 2kg", "Mumias 1kg", "Loose"
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     unit: Mapped[Unit] = mapped_column(
         __import__("sqlalchemy").Enum(Unit, name="unit", values_callable=lambda e: [m.value for m in e]),

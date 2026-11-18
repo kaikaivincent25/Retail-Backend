@@ -282,7 +282,7 @@ def popular_products(
             Variant.name.label("variant_name"),
             Product.id.label("product_id"),
             Product.name.label("product_name"),
-            Product.image_url.label("image_url"),
+            func.coalesce(Variant.image_url, Product.image_url).label("image_url"),
             Variant.unit,
             Variant.sale_mode,
             Variant.selling_price,

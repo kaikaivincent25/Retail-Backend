@@ -24,6 +24,7 @@ def _public_product(product: Product, variants: list[Variant]) -> PublicProductR
             PublicVariantRead(
                 id=variant.id,
                 name=variant.name,
+                image_url=variant.image_url or product.public_image_url or product.image_url,
                 unit=variant.unit.value,
                 sale_mode=variant.sale_mode.value,
                 selling_price=variant.selling_price,

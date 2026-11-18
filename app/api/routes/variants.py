@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import String, or_, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_cashier, require_manager
@@ -126,7 +126,7 @@ def browse_variants(
             Product.id.label("product_id"),
             Product.name.label("product_name"),
             Product.sales_group.label("sales_group"),
-            Product.image_url.label("image_url"),
+            func.coalesce(Variant.image_url, Product.image_url).label("image_url"),
             Variant.unit,
             Variant.sale_mode,
             Variant.selling_price,
@@ -297,7 +297,7 @@ def update_variant(
     )
 
     for field, value in payload.model_dump(exclude_unset=True).items():
-        if value is None:
+        if value is None and field != "image_url":
             continue
         setattr(variant, field, value)
     if price_changed:

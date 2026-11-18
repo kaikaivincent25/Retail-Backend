@@ -197,3 +197,47 @@ def test_variant_price_changes_are_attributed_and_history_is_retrievable(invento
                 )
             ).all()
         ) == 2
+
+
+def test_variant_image_overrides_product_image_and_can_be_cleared(inventory_client):
+    client, _ = inventory_client
+    response = client.post(
+        "/products",
+        json={
+            "name": "Image Test Product",
+            "image_url": "https://images.example.com/product.jpg",
+            "public_image_url": "https://images.example.com/public-product.jpg",
+            "is_public": True,
+            "variants": [
+                {
+                    "name": "Blue",
+                    "unit": "piece",
+                    "selling_price": "10.00",
+                    "image_url": "https://images.example.com/blue.jpg",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    product = response.json()
+    variant_id = product["variants"][0]["id"]
+    assert product["variants"][0]["image_url"] == "https://images.example.com/blue.jpg"
+
+    browsed = client.get("/variants")
+    assert browsed.status_code == 200, browsed.text
+    assert browsed.json()[0]["image_url"] == "https://images.example.com/blue.jpg"
+    public = client.get("/public/shops/inventory-import-test")
+    assert public.status_code == 200, public.text
+    assert public.json()["products"][0]["variants"][0]["image_url"] == (
+        "https://images.example.com/blue.jpg"
+    )
+
+    cleared = client.patch(f"/variants/{variant_id}", json={"image_url": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["image_url"] is None
+    browsed = client.get("/variants")
+    assert browsed.json()[0]["image_url"] == "https://images.example.com/product.jpg"
+    public = client.get("/public/shops/inventory-import-test")
+    assert public.json()["products"][0]["variants"][0]["image_url"] == (
+        "https://images.example.com/public-product.jpg"
+    )
