@@ -15,6 +15,8 @@ from app.models.user import User
 from app.schemas.auth import Token
 from app.schemas.platform import (
     PlatformActivityRead,
+    PlatformBillingPlanRead,
+    PlatformBillingPlanUpdate,
     PlatformFeatureSettingsRead,
     PlatformFeatureSettingsUpdate,
     PlatformOverview,
@@ -23,7 +25,7 @@ from app.schemas.platform import (
     PlatformUserUpdate,
 )
 from app.models.user import UserRole
-from app.services.billing import MANAGEABLE_FEATURES, current_status, utc_now
+from app.services.billing import MANAGEABLE_FEATURES, PLAN_FEATURE_KEYS, current_status, utc_now
 
 router = APIRouter(prefix="/platform", tags=["Platform"])
 
@@ -76,6 +78,73 @@ def overview(db: Session = Depends(get_db), _: PlatformUser = Depends(require_pl
         new_shops_last_30_days=int(new_shops),
         activity_events_last_7_days=int(recent_activity),
     )
+
+
+@router.get("/plans", response_model=list[PlatformBillingPlanRead])
+def billing_plans(
+    db: Session = Depends(get_db),
+    _: PlatformUser = Depends(require_platform_owner),
+):
+    return db.scalars(select(BillingPlan).order_by(BillingPlan.monthly_price, BillingPlan.code)).all()
+
+
+@router.patch("/plans/{plan_code}", response_model=PlatformBillingPlanRead)
+def update_billing_plan(
+    plan_code: str,
+    payload: PlatformBillingPlanUpdate,
+    db: Session = Depends(get_db),
+    platform_user: PlatformUser = Depends(require_platform_owner),
+):
+    plan = db.scalar(select(BillingPlan).where(BillingPlan.code == plan_code))
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Billing plan not found")
+    if plan.code == "free" and (payload.monthly_price != 0 or payload.annual_price not in (None, 0)):
+        raise HTTPException(status_code=422, detail="The Free plan must remain priced at zero")
+
+    unknown_features = set(payload.features) - PLAN_FEATURE_KEYS
+    if unknown_features:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown plan features: {', '.join(sorted(unknown_features))}",
+        )
+
+    updated_features = {
+        feature: payload.features.get(feature, False)
+        for feature in sorted(PLAN_FEATURE_KEYS)
+    }
+    changed_features = sorted(
+        feature for feature in PLAN_FEATURE_KEYS
+        if bool((plan.features or {}).get(feature, False)) != updated_features[feature]
+    )
+    previous_values = {
+        "monthly_price": plan.monthly_price,
+        "annual_price": plan.annual_price,
+        "max_users": plan.max_users,
+    }
+    plan.monthly_price = payload.monthly_price
+    plan.annual_price = payload.annual_price
+    plan.max_users = payload.max_users
+    plan.features = updated_features
+    updated_values = {
+        "monthly_price": plan.monthly_price,
+        "annual_price": plan.annual_price,
+        "max_users": plan.max_users,
+    }
+    changed_values = [
+        f"{field}: {previous_values[field]} -> {updated_values[field]}"
+        for field in previous_values
+        if previous_values[field] != updated_values[field]
+    ]
+    if changed_features:
+        changed_values.append(f"features: {', '.join(changed_features)}")
+    db.add(PlatformAuditLog(
+        platform_user_id=platform_user.id,
+        action="billing_plan_updated",
+        description=f"{plan.name} ({plan.code}): {'; '.join(changed_values) or 'no changes'}"[:255],
+    ))
+    db.commit()
+    db.refresh(plan)
+    return plan
 
 
 @router.get("/shops", response_model=list[PlatformShopRead])

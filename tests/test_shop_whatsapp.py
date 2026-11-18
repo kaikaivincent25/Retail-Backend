@@ -29,7 +29,8 @@ def whatsapp_client():
     db.add_all([shop, other_shop])
     db.flush()
     plan = BillingPlan(code="business", name="Business", monthly_price=999, features={"online_store": True})
-    db.add(plan)
+    free_plan = BillingPlan(code="free", name="Free", monthly_price=0, annual_price=0, features={})
+    db.add_all([plan, free_plan])
     db.flush()
     now = datetime.now(timezone.utc)
     db.add_all([
@@ -135,6 +136,47 @@ def test_platform_owner_can_suspend_storefront_without_suspending_subscription(w
         assert response.json()["suspended_features"] == ["online_store"]
         assert client.get(f"/public/shops/{shop.slug}").status_code == 402
         assert db.query(PlatformAuditLog).filter_by(action="shop_features_updated").count() == 1
+    finally:
+        app.dependency_overrides.pop(require_platform_owner, None)
+
+
+def test_platform_owner_can_edit_plan_prices_limits_and_features(whatsapp_client):
+    client, db, *_ = whatsapp_client
+    platform_user = PlatformUser(
+        full_name="Platform Plan Admin",
+        username="platform_plan_admin",
+        password_hash="unused",
+    )
+    db.add(platform_user)
+    db.commit()
+    app.dependency_overrides[require_platform_owner] = lambda: platform_user
+    try:
+        plans_response = client.get("/platform/plans")
+        assert plans_response.status_code == 200, plans_response.text
+        assert any(plan["code"] == "business" for plan in plans_response.json())
+
+        response = client.patch(
+            "/platform/plans/business",
+            json={
+                "monthly_price": 1299,
+                "annual_price": 12990,
+                "max_users": 18,
+                "features": {"online_store": True, "reports.full": True},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["monthly_price"] == 1299
+        assert response.json()["annual_price"] == 12990
+        assert response.json()["max_users"] == 18
+        assert response.json()["features"]["reports.full"] is True
+        assert db.query(PlatformAuditLog).filter_by(action="billing_plan_updated").count() == 1
+
+        free_price_response = client.patch(
+            "/platform/plans/free",
+            json={"monthly_price": 99, "annual_price": 0, "max_users": 2, "features": {}},
+        )
+        assert free_price_response.status_code == 422
     finally:
         app.dependency_overrides.pop(require_platform_owner, None)
 

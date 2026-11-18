@@ -16,6 +16,12 @@ MANAGEABLE_FEATURES = frozenset({
     "online_store",
     "reports.full",
 })
+PLAN_FEATURE_KEYS = MANAGEABLE_FEATURES | frozenset({
+    "reports.basic",
+    "reports.export",
+    "scheduled.reports",
+    "multi_branch",
+})
 
 
 def utc_now() -> datetime:

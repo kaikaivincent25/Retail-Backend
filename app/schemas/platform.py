@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.user import UserRole
 
@@ -27,6 +27,26 @@ class PlatformFeatureSettingsRead(BaseModel):
 
 class PlatformFeatureSettingsUpdate(BaseModel):
     suspended_features: list[str]
+
+
+class PlatformBillingPlanRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    monthly_price: int
+    annual_price: int | None
+    max_users: int | None
+    features: dict[str, bool]
+    is_active: bool
+
+
+class PlatformBillingPlanUpdate(BaseModel):
+    monthly_price: int = Field(ge=0)
+    annual_price: int | None = Field(default=None, ge=0)
+    max_users: int | None = Field(default=None, ge=1)
+    features: dict[str, bool]
 
 
 class PlatformOverview(BaseModel):
