@@ -146,6 +146,7 @@ class PopularVariant(BaseModel):
     variant_name: str
     product_id: int
     product_name: str
+    category: str | None = None
     image_url: str | None = None
     unit: str
     sale_mode: str
@@ -160,6 +161,7 @@ class VariantBrowseResult(BaseModel):
     variant_name: str
     product_id: int
     product_name: str
+    category: str | None = None
     sales_group: SalesGroup | None = None
     image_url: str | None = None
     unit: str

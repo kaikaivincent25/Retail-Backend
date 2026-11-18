@@ -282,6 +282,7 @@ def popular_products(
             Variant.name.label("variant_name"),
             Product.id.label("product_id"),
             Product.name.label("product_name"),
+            Product.category.label("category"),
             func.coalesce(Variant.image_url, Product.image_url).label("image_url"),
             Variant.unit,
             Variant.sale_mode,
@@ -298,7 +299,7 @@ def popular_products(
             Variant.is_active.is_(True),
         )
         .group_by(
-            Variant.id, Variant.name, Product.id, Product.name,
+            Variant.id, Variant.name, Product.id, Product.name, Product.category,
             Variant.unit, Variant.sale_mode, Variant.selling_price, Variant.quantity,
         )
         .order_by(total_quantity_sold.desc(), Variant.name.asc())
@@ -336,6 +337,7 @@ def popular_products(
                 variant_name=r.variant_name,
                 product_id=r.product_id,
                 product_name=r.product_name,
+                category=r.category,
                 image_url=r.image_url,
                 unit=r.unit.value,
                 sale_mode=r.sale_mode.value,
