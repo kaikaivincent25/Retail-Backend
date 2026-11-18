@@ -84,6 +84,7 @@ def get_public_shop(slug: str, db: Session = Depends(get_db)):
         location=shop.location,
         currency=shop.currency,
         business_type=shop.business_type,
+        whatsapp_number=shop.whatsapp_number,
         products=result,
     )
 

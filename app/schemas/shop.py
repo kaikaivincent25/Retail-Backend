@@ -1,4 +1,8 @@
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.services.customer_identity import normalize_customer_phone
 
 BUSINESS_TYPES = {
     "general_retail", "household_retail", "bookshop", "electronics", "clothing", "cosmetics"
@@ -36,6 +40,7 @@ class ShopRead(BaseModel):
     mpesa_till_number: str | None
     mpesa_paybill_number: str | None
     mpesa_paybill_account_number: str | None
+    whatsapp_number: str | None
 
 
 class ShopReceiptRead(BaseModel):
@@ -68,6 +73,7 @@ class ShopUpdate(BaseModel):
     mpesa_till_number: str | None = Field(default=None, max_length=50)
     mpesa_paybill_number: str | None = Field(default=None, max_length=50)
     mpesa_paybill_account_number: str | None = Field(default=None, max_length=100)
+    whatsapp_number: str | None = Field(default=None, max_length=30)
 
     @field_validator(
         "mpesa_pochi_number",
@@ -81,6 +87,21 @@ class ShopUpdate(BaseModel):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+    @field_validator("whatsapp_number", mode="before")
+    @classmethod
+    def normalize_whatsapp_number(cls, value):
+        if not isinstance(value, str):
+            return value
+        value = value.strip()
+        if not value:
+            return None
+        if not re.fullmatch(r"\+?[0-9\s()-]+", value):
+            raise ValueError("Enter a valid WhatsApp phone number")
+        normalized = normalize_customer_phone(value)
+        if normalized is None:
+            raise ValueError("Enter a valid WhatsApp phone number")
+        return f"+{normalized}"
 
     @field_validator("business_type")
     @classmethod

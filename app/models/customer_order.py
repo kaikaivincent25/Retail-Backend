@@ -1,7 +1,7 @@
 import enum
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Enum, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -44,6 +44,7 @@ class CustomerOrder(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("shop_id", "order_number", name="uq_customer_orders_shop_number"),
         UniqueConstraint("public_token", name="uq_customer_orders_public_token"),
+        Index("ix_customer_orders_shop_phone_normalized", "shop_id", "customer_phone_normalized"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -76,6 +77,10 @@ class CustomerOrder(TimestampMixin, Base):
     mpesa_receipt_number: Mapped[str | None] = mapped_column(String(30), nullable=True, unique=True)
     customer_name: Mapped[str] = mapped_column(String(150), nullable=False)
     customer_phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    customer_phone_normalized: Mapped[str | None] = mapped_column(String(15), nullable=True)
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     delivery_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     estate: Mapped[str | None] = mapped_column(String(150), nullable=True)
     landmark: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -88,6 +93,7 @@ class CustomerOrder(TimestampMixin, Base):
     customer_notified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     items: Mapped[list["CustomerOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    customer: Mapped["Customer | None"] = relationship()
 
 
 class CustomerOrderItem(TimestampMixin, Base):

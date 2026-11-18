@@ -133,6 +133,7 @@ class PublicShopRead(BaseModel):
     location: str | None = None
     currency: str
     business_type: str
+    whatsapp_number: str | None = None
     products: list[PublicProductRead] = Field(default_factory=list)
 
 

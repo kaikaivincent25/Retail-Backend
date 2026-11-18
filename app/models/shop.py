@@ -22,6 +22,7 @@ class Shop(TimestampMixin, Base):
     business_type: Mapped[str] = mapped_column(
         String(40), default="general_retail", server_default="general_retail", nullable=False
     )
+    whatsapp_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     breakfast_start_minute: Mapped[int] = mapped_column(
         default=360, server_default="360", nullable=False
     )

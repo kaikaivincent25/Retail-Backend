@@ -64,6 +64,7 @@ class CustomerOrderRead(BaseModel):
     payment_method: OrderPaymentMethod
     customer_name: str
     customer_phone: str
+    customer_id: int | None = None
     delivery_address: str | None
     estate: str | None
     landmark: str | None

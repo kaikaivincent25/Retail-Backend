@@ -8,6 +8,7 @@ from app.models import (
     BillingPayment,
     BillingPlan,
     Customer,
+    CustomerActivity,
     CustomerOrder,
     CustomerOrderItem,
     CustomerPayment,
@@ -83,6 +84,17 @@ def test_delete_shop_removes_dependent_records(monkeypatch):
         customer = Customer(shop_id=shop.id, full_name="Test Customer")
         db.add_all([variant, customer])
         db.flush()
+        customer_activity = CustomerActivity(
+            shop_id=shop.id,
+            customer_id=customer.id,
+            activity_type="note",
+            body="Customer deletion test",
+            status="completed",
+            created_by_user_id=admin.id,
+        )
+        db.add(customer_activity)
+        db.flush()
+        customer_activity_id = customer_activity.id
 
         sale = Sale(
             shop_id=shop.id,
@@ -211,6 +223,7 @@ def test_delete_shop_removes_dependent_records(monkeypatch):
         assert db.get(Shop, other_shop_id) is not None
         assert db.get(User, admin_id) is None
         assert db.get(User, other_admin.id) is not None
+        assert db.get(CustomerActivity, customer_activity_id) is None
 
     Base.metadata.drop_all(engine)
     engine.dispose()

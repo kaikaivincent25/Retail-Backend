@@ -17,6 +17,7 @@ from app.models.customer_order import (
     OrderPaymentMethod,
     OrderPaymentStatus,
 )
+from app.models.customer import Customer
 from app.models.product import Product
 from app.models.shop import Shop
 from app.models.user import User
@@ -42,6 +43,7 @@ from app.services.mpesa import (
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.services.notifications import queue_order_notification
+from app.services.customer_identity import normalize_customer_phone
 from app.schemas.customer_order import (
     CustomerOrderCreate,
     CustomerOrderRead,
@@ -133,6 +135,19 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
         ))
 
     public_token = secrets.token_urlsafe(32)
+    normalized_phone = normalize_customer_phone(payload.customer_phone)
+    matched_customer_ids = (
+        db.scalars(
+            select(Customer.id).where(
+                Customer.shop_id == shop.id,
+                Customer.phone_normalized == normalized_phone,
+                Customer.is_active.is_(True),
+            )
+        ).all()
+        if normalized_phone
+        else []
+    )
+    customer_id = matched_customer_ids[0] if len(matched_customer_ids) == 1 else None
     order = CustomerOrder(
         shop_id=shop.id,
         # order_number is non-null, but the final human-readable number uses
@@ -144,6 +159,8 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
         payment_method=payload.payment_method,
         customer_name=payload.customer_name.strip(),
         customer_phone=payload.customer_phone.strip(),
+        customer_phone_normalized=normalized_phone,
+        customer_id=customer_id,
         delivery_address=payload.delivery_address.strip() if payload.delivery_address else None,
         estate=payload.estate.strip() if payload.estate else None,
         landmark=payload.landmark.strip() if payload.landmark else None,
@@ -242,6 +259,7 @@ def update_customer_order(
                     amount_received=order.total,
                     payment_method=(PaymentMethod.MPESA if order.payment_method == OrderPaymentMethod.MANUAL_MPESA else PaymentMethod.CASH),
                     session_id=session.id,
+                    customer_id=order.customer_id,
                     allow_confirmed_mpesa=order.payment_method == OrderPaymentMethod.MANUAL_MPESA,
                 )
             except SaleError as exc:

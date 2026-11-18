@@ -153,6 +153,8 @@ def update_shop(
             setattr(shop, field, schedule[field])
     for field in PAYMENT_DESTINATION_FIELDS & payload.model_fields_set:
         setattr(shop, field, getattr(payload, field))
+    if "whatsapp_number" in payload.model_fields_set:
+        shop.whatsapp_number = payload.whatsapp_number
 
     if shop.mpesa_paybill_number and not shop.mpesa_paybill_account_number:
         raise HTTPException(

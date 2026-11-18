@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.customer import Customer
+from app.models.customer_activity import CustomerActivity
 from app.models.customer_payment import CustomerPayment
 from app.models.product import Product
 from app.models.sale import PaymentMethod, Sale, SaleItem, SaleStatus
@@ -39,13 +40,8 @@ def complete_sale(
     allow_confirmed_mpesa: bool = False,
 ) -> Sale:
     try:
-        if is_credit:
-            if customer_id is None:
-                raise SaleError("A customer must be selected for credit purchases")
-            if due_date is None:
-                raise SaleError("Every credit sale requires a due date")
-            if due_date < date.today():
-                raise SaleError("Credit due date cannot be in the past")
+        customer = None
+        if customer_id is not None:
             customer = db.scalar(
                 select(Customer)
                 .where(Customer.id == customer_id, Customer.shop_id == shop_id)
@@ -53,8 +49,15 @@ def complete_sale(
             )
             if customer is None:
                 raise SaleError("Customer not found")
+        if is_credit:
+            if customer is None:
+                raise SaleError("A customer must be selected for credit purchases")
             if not customer.is_active:
                 raise SaleError("Cannot make credit sales to an inactive customer")
+            if due_date is None:
+                raise SaleError("Every credit sale requires a due date")
+            if due_date < date.today():
+                raise SaleError("Credit due date cannot be in the past")
             init_amt = initial_payment or Decimal("0.00")
             if init_amt < 0:
                 raise SaleError("Initial payment cannot be negative")
@@ -196,6 +199,19 @@ def complete_sale(
             if is_credit
             else f"Sale #{sale.id} total {sale.total}"
         )
+        if customer is not None and customer.lead_status != "won":
+            previous_status = customer.lead_status
+            customer.lead_status = "won"
+            db.add(
+                CustomerActivity(
+                    shop_id=shop_id,
+                    customer_id=customer.id,
+                    activity_type="lead_status",
+                    body=f"Lead stage changed from {previous_status.title()} to Won after sale #{sale.id}.",
+                    status="completed",
+                    created_by_user_id=cashier_id,
+                )
+            )
         log_activity(
             db, user_id=cashier_id, action=ActivityAction.SALE_COMPLETED,
             entity_type="sale", entity_id=sale.id,
