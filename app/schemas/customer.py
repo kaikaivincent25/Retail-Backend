@@ -40,6 +40,7 @@ class CustomerUpdate(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
     credit_limit: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
     is_active: bool | None = None
+    identity_review_required: bool | None = None
     lead_status: Literal["new", "contacted", "interested", "won", "lost"] | None = None
 
     @field_validator("phone", "email", mode="before")
@@ -69,6 +70,7 @@ class CustomerRead(BaseModel):
     lead_status: str
     credit_limit: Decimal | None
     is_active: bool
+    identity_review_required: bool = False
     created_at: datetime
     updated_at: datetime
 

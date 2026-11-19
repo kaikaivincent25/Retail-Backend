@@ -1,16 +1,18 @@
 import secrets
 import re
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_cashier
 from app.core.database import get_db
 from app.models.customer_order import (
     CustomerOrder,
+    CustomerOrderEvent,
     CustomerOrderItem,
     CustomerOrderStatus,
     OrderFulfilment,
@@ -49,6 +51,8 @@ from app.schemas.customer_order import (
     CustomerOrderCreate,
     CustomerOrderRead,
     CustomerOrderStatusUpdate,
+    CustomerOrderPaymentRecord,
+    CustomerOrderEventRead,
     PublicOrderRead,
 )
 
@@ -69,6 +73,28 @@ def _order_query(order_id: int | None = None):
     if order_id is not None:
         query = query.where(CustomerOrder.id == order_id)
     return query
+
+
+def _record_order_event(
+    db: Session,
+    order: CustomerOrder,
+    event_type: str,
+    actor_user_id: int | None,
+    from_status: CustomerOrderStatus | None = None,
+    to_status: CustomerOrderStatus | None = None,
+    details: str | None = None,
+) -> None:
+    db.add(
+        CustomerOrderEvent(
+            order_id=order.id,
+            shop_id=order.shop_id,
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            from_status=from_status.value if from_status else None,
+            to_status=to_status.value if to_status else None,
+            details=details,
+        )
+    )
 
 
 def _public_order(order: CustomerOrder) -> PublicOrderRead:
@@ -138,18 +164,30 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
 
     public_token = secrets.token_urlsafe(32)
     normalized_phone = normalize_customer_phone(payload.customer_phone)
-    matched_customer_ids = (
+    matched_customers = (
         db.scalars(
-            select(Customer.id).where(
+            select(Customer).where(
                 Customer.shop_id == shop.id,
                 Customer.phone_normalized == normalized_phone,
                 Customer.is_active.is_(True),
-            )
+            ).order_by(Customer.id)
         ).all()
         if normalized_phone
         else []
     )
-    customer_id = matched_customer_ids[0] if len(matched_customer_ids) == 1 else None
+    identity_review_required = len(matched_customers) > 1
+    if len(matched_customers) == 1:
+        customer = matched_customers[0]
+    else:
+        customer = Customer(
+            shop_id=shop.id,
+            full_name=payload.customer_name.strip(),
+            phone=payload.customer_phone.strip(),
+            phone_normalized=normalized_phone,
+            identity_review_required=identity_review_required,
+        )
+        db.add(customer)
+        db.flush()
     order = CustomerOrder(
         shop_id=shop.id,
         # order_number is non-null, but the final human-readable number uses
@@ -162,7 +200,7 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
         customer_name=payload.customer_name.strip(),
         customer_phone=payload.customer_phone.strip(),
         customer_phone_normalized=normalized_phone,
-        customer_id=customer_id,
+        customer_id=customer.id,
         delivery_address=payload.delivery_address.strip() if payload.delivery_address else None,
         estate=payload.estate.strip() if payload.estate else None,
         landmark=payload.landmark.strip() if payload.landmark else None,
@@ -175,6 +213,19 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
     db.add(order)
     db.flush()
     order.order_number = _order_number(shop, order.id)
+    _record_order_event(
+        db,
+        order,
+        "order_placed",
+        None,
+        to_status=CustomerOrderStatus.PENDING,
+        details=(
+            "Customer profile needs identity review because multiple active profiles "
+            "share this phone number."
+            if identity_review_required
+            else "Order submitted through the public shop."
+        ),
+    )
     queue_order_notification(
         db,
         order,
@@ -199,6 +250,8 @@ def track_customer_order(public_token: str, db: Session = Depends(get_db)):
 @private_router.get("", response_model=list[CustomerOrderRead])
 def list_customer_orders(
     order_status: CustomerOrderStatus | None = Query(None, alias="status"),
+    payment_status: OrderPaymentStatus | None = Query(None),
+    search: str | None = Query(default=None, max_length=150),
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
@@ -207,6 +260,17 @@ def list_customer_orders(
     query = _order_query(None).where(CustomerOrder.shop_id == user.shop_id)
     if order_status is not None:
         query = query.where(CustomerOrder.status == order_status)
+    if payment_status is not None:
+        query = query.where(CustomerOrder.payment_status == payment_status)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                CustomerOrder.order_number.ilike(term),
+                CustomerOrder.customer_name.ilike(term),
+                CustomerOrder.customer_phone.ilike(term),
+            )
+        )
     return db.scalars(query.order_by(CustomerOrder.created_at.desc()).limit(200)).all()
 
 
@@ -230,14 +294,27 @@ def update_customer_order(
             CustomerOrderStatus.OUT_FOR_DELIVERY,
             CustomerOrderStatus.CANCELLED,
         },
-        CustomerOrderStatus.READY_FOR_PICKUP: {CustomerOrderStatus.COMPLETED, CustomerOrderStatus.CANCELLED},
-        CustomerOrderStatus.OUT_FOR_DELIVERY: {CustomerOrderStatus.DELIVERED, CustomerOrderStatus.COMPLETED},
+        CustomerOrderStatus.READY_FOR_PICKUP: {CustomerOrderStatus.DELIVERED, CustomerOrderStatus.CANCELLED},
+        CustomerOrderStatus.OUT_FOR_DELIVERY: {CustomerOrderStatus.DELIVERED, CustomerOrderStatus.CANCELLED},
         CustomerOrderStatus.DELIVERED: {CustomerOrderStatus.COMPLETED},
     }
     if payload.status not in allowed_transitions.get(order.status, set()):
         raise HTTPException(status_code=409, detail=f"Cannot move an order from {order.status.value} to {payload.status.value}")
     if payload.status == CustomerOrderStatus.OUT_FOR_DELIVERY and order.fulfilment != OrderFulfilment.DELIVERY:
         raise HTTPException(status_code=409, detail="Pickup orders cannot be sent for delivery")
+    if payload.status == CustomerOrderStatus.DELIVERED:
+        recipient = (payload.received_by_name or "").strip()
+        if not recipient:
+            raise HTTPException(status_code=422, detail="Record who received or collected the order")
+        order.received_by_name = recipient
+    if (
+        payload.status in {CustomerOrderStatus.REJECTED, CustomerOrderStatus.CANCELLED}
+        and order.payment_status == OrderPaymentStatus.PAID
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="A paid order cannot be cancelled or rejected without recording a refund.",
+        )
     if payload.status == CustomerOrderStatus.ACCEPTED:
         try:
             reserve_order(db, order, user.id)
@@ -246,8 +323,8 @@ def update_customer_order(
     if payload.status in {CustomerOrderStatus.REJECTED, CustomerOrderStatus.CANCELLED}:
         release_order_reservations(db, order.id, user.id)
     if payload.status == CustomerOrderStatus.COMPLETED:
-        if order.payment_method == OrderPaymentMethod.MANUAL_MPESA and order.payment_status != OrderPaymentStatus.PAID:
-            raise HTTPException(status_code=409, detail="Confirm M-Pesa payment before completing this order")
+        if order.payment_status != OrderPaymentStatus.PAID:
+            raise HTTPException(status_code=409, detail="Record payment before closing this order")
         if order.sale_id is None:
             session = get_open_session(db, user.shop_id, lock=True)
             if session is None:
@@ -259,7 +336,11 @@ def update_customer_order(
                     cashier_id=user.id,
                     items=[{"variant_id": item.variant_id, "quantity": item.quantity} for item in order.items],
                     amount_received=order.total,
-                    payment_method=(PaymentMethod.MPESA if order.payment_method == OrderPaymentMethod.MANUAL_MPESA else PaymentMethod.CASH),
+                    payment_method=(
+                        PaymentMethod.MPESA
+                        if order.payment_method == OrderPaymentMethod.MANUAL_MPESA
+                        else PaymentMethod.CASH
+                    ),
                     session_id=session.id,
                     customer_id=order.customer_id,
                     allow_confirmed_mpesa=order.payment_method == OrderPaymentMethod.MANUAL_MPESA,
@@ -268,6 +349,7 @@ def update_customer_order(
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             order.sale_id = sale.id
             consume_order_reservations(db, order.id)
+    previous_status = order.status
     order.status = payload.status
     queue_order_notification(
         db,
@@ -277,6 +359,19 @@ def update_customer_order(
     )
     if "shop_note" in payload.model_fields_set:
         order.shop_note = payload.shop_note
+    _record_order_event(
+        db,
+        order,
+        "status_changed",
+        user.id,
+        from_status=previous_status,
+        to_status=order.status,
+        details=(
+            f"Received by {order.received_by_name}."
+            if order.status == CustomerOrderStatus.DELIVERED
+            else payload.shop_note
+        ),
+    )
     db.commit()
     db.refresh(order)
     return order
@@ -304,12 +399,26 @@ def initiate_order_mpesa(public_token: str, db: Session = Depends(get_db)):
         )
     except (ValueError, MpesaConfigurationError, MpesaRequestError) as exc:
         order.payment_status = OrderPaymentStatus.FAILED
+        _record_order_event(
+            db,
+            order,
+            "payment_failed",
+            None,
+            details=f"M-Pesa payment could not be started: {exc}",
+        )
         db.commit()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     order.payment_status = OrderPaymentStatus.INITIATED
     order.mpesa_phone_number = phone
     order.mpesa_checkout_request_id = identifiers["checkout_request_id"]
     order.mpesa_merchant_request_id = identifiers["merchant_request_id"]
+    _record_order_event(
+        db,
+        order,
+        "payment_initiated",
+        None,
+        details=f"M-Pesa payment initiated for {order.order_number}.",
+    )
     db.commit()
     db.refresh(order)
     return _public_order(order)
@@ -327,6 +436,13 @@ def query_order_mpesa(public_token: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if result == StkQueryStatus.FAILED:
             order.payment_status = OrderPaymentStatus.FAILED
+            _record_order_event(
+                db,
+                order,
+                "payment_failed",
+                None,
+                details=f"M-Pesa payment failed for {order.order_number}.",
+            )
             db.commit()
         elif result == StkQueryStatus.COMPLETED:
             # The callback remains authoritative for the receipt and phone metadata.
@@ -346,15 +462,132 @@ def confirm_order_manual_payment(
         raise HTTPException(status_code=404, detail="Order not found")
     if order.payment_method != OrderPaymentMethod.MANUAL_MPESA:
         raise HTTPException(status_code=409, detail="This order does not use manual M-Pesa")
-    if order.payment_status == OrderPaymentStatus.PAID and order.mpesa_receipt_number == receipt_number.strip():
-        return order
+    if order.status in {CustomerOrderStatus.REJECTED, CustomerOrderStatus.CANCELLED}:
+        raise HTTPException(status_code=409, detail="This order is already closed")
+    receipt = receipt_number.strip()
+    if order.payment_status == OrderPaymentStatus.PAID:
+        if order.mpesa_receipt_number == receipt:
+            return order
+        raise HTTPException(status_code=409, detail="Payment has already been recorded")
     order.payment_status = OrderPaymentStatus.PAID
-    order.mpesa_receipt_number = receipt_number.strip()
+    order.mpesa_receipt_number = receipt
+    order.payment_reference = receipt
+    order.paid_at = datetime.now(timezone.utc)
+    order.paid_by_user_id = user.id
+    _record_order_event(
+        db,
+        order,
+        "payment_confirmed",
+        user.id,
+        details=f"M-Pesa payment confirmed with receipt {receipt}.",
+    )
     queue_order_notification(db, order, "payment_confirmed", f"Payment confirmed for {order.order_number}.")
     log_activity(db, user_id=user.id, action=ActivityAction.SALE_COMPLETED, entity_type="customer_order", entity_id=order.id, description=f"M-Pesa payment confirmed for order {order.order_number}: {order.mpesa_receipt_number}")
     db.commit()
     db.refresh(order)
     return order
+
+
+@private_router.post("/{order_id}/payment/record", response_model=CustomerOrderRead)
+def record_order_cash_payment(
+    order_id: int,
+    payload: CustomerOrderPaymentRecord,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    order = db.scalar(
+        _order_query(order_id)
+        .where(CustomerOrder.shop_id == user.shop_id)
+        .with_for_update()
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.payment_method == OrderPaymentMethod.MANUAL_MPESA:
+        raise HTTPException(
+            status_code=409,
+            detail="Confirm M-Pesa with its receipt number instead.",
+        )
+    if order.status in {
+        CustomerOrderStatus.REJECTED,
+        CustomerOrderStatus.CANCELLED,
+    }:
+        raise HTTPException(status_code=409, detail="This order is already closed")
+    eligible_statuses = (
+        {CustomerOrderStatus.READY_FOR_PICKUP, CustomerOrderStatus.DELIVERED}
+        if order.payment_method == OrderPaymentMethod.PAY_AT_PICKUP
+        else {CustomerOrderStatus.OUT_FOR_DELIVERY, CustomerOrderStatus.DELIVERED}
+    )
+    if order.status not in eligible_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail="Record cash payment when the order is ready for handoff or delivered.",
+        )
+    if order.payment_status == OrderPaymentStatus.PAID:
+        return order
+    if get_open_session(db, user.shop_id, lock=True) is None:
+        raise HTTPException(status_code=422, detail="Open a cash session before recording payment")
+
+    reference = payload.reference.strip() if payload.reference else None
+    order.payment_status = OrderPaymentStatus.PAID
+    order.payment_reference = reference
+    order.paid_at = datetime.now(timezone.utc)
+    order.paid_by_user_id = user.id
+    _record_order_event(
+        db,
+        order,
+        "payment_confirmed",
+        user.id,
+        details=(
+            f"{order.payment_method.value.replace('_', ' ').title()} payment recorded."
+            + (f" Reference: {reference}." if reference else "")
+        ),
+    )
+    queue_order_notification(
+        db,
+        order,
+        "payment_confirmed",
+        f"Payment confirmed for order {order.order_number}.",
+    )
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@private_router.get("/{order_id}/history", response_model=list[CustomerOrderEventRead])
+def get_customer_order_history(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    order = db.scalar(
+        select(CustomerOrder.id).where(
+            CustomerOrder.id == order_id,
+            CustomerOrder.shop_id == user.shop_id,
+        )
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    events = db.scalars(
+        select(CustomerOrderEvent)
+        .options(selectinload(CustomerOrderEvent.actor))
+        .where(
+            CustomerOrderEvent.order_id == order_id,
+            CustomerOrderEvent.shop_id == user.shop_id,
+        )
+        .order_by(CustomerOrderEvent.created_at, CustomerOrderEvent.id)
+    ).all()
+    return [
+        CustomerOrderEventRead(
+            id=event.id,
+            event_type=event.event_type,
+            from_status=event.from_status,
+            to_status=event.to_status,
+            details=event.details,
+            actor_name=event.actor.full_name if event.actor else None,
+            created_at=event.created_at,
+        )
+        for event in events
+    ]
 
 
 def process_order_mpesa_callback(db: Session, payload: dict[str, Any]) -> bool:
@@ -374,6 +607,13 @@ def process_order_mpesa_callback(db: Session, payload: dict[str, Any]) -> bool:
     if result_code != 0:
         order.payment_status = OrderPaymentStatus.FAILED
         queue_order_notification(db, order, "payment_failed", f"Payment failed for {order.order_number}. You can try again.")
+        _record_order_event(
+            db,
+            order,
+            "payment_failed",
+            None,
+            details=f"M-Pesa payment failed for {order.order_number}.",
+        )
         db.commit()
         return True
     entries = callback.get("CallbackMetadata", {}).get("Item", [])
@@ -388,6 +628,15 @@ def process_order_mpesa_callback(db: Session, payload: dict[str, Any]) -> bool:
         return False
     order.payment_status = OrderPaymentStatus.PAID
     order.mpesa_receipt_number = receipt
+    order.payment_reference = receipt
+    order.paid_at = datetime.now(timezone.utc)
+    _record_order_event(
+        db,
+        order,
+        "payment_confirmed",
+        None,
+        details=f"M-Pesa payment confirmed with receipt {receipt}.",
+    )
     queue_order_notification(db, order, "payment_confirmed", f"Payment confirmed for {order.order_number}.")
     db.commit()
     return True

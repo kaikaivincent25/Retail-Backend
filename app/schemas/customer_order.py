@@ -42,6 +42,21 @@ class CustomerOrderCreate(BaseModel):
 class CustomerOrderStatusUpdate(BaseModel):
     status: CustomerOrderStatus
     shop_note: str | None = Field(default=None, max_length=1000)
+    received_by_name: str | None = Field(default=None, max_length=150)
+
+
+class CustomerOrderPaymentRecord(BaseModel):
+    reference: str | None = Field(default=None, max_length=100)
+
+
+class CustomerOrderEventRead(BaseModel):
+    id: int
+    event_type: str
+    from_status: str | None
+    to_status: str | None
+    details: str | None
+    actor_name: str | None
+    created_at: datetime
 
 
 class CustomerOrderItemRead(BaseModel):
@@ -71,10 +86,14 @@ class CustomerOrderRead(BaseModel):
     delivery_instructions: str | None
     preferred_delivery_time: str | None
     shop_note: str | None
+    received_by_name: str | None = None
     subtotal: Decimal
     total: Decimal
     payment_status: OrderPaymentStatus
     mpesa_receipt_number: str | None = None
+    payment_reference: str | None = None
+    paid_at: datetime | None = None
+    paid_by_user_id: int | None = None
     sale_id: int | None = None
     items: list[CustomerOrderItemRead]
     created_at: datetime

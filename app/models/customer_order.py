@@ -1,7 +1,8 @@
 import enum
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -87,13 +88,46 @@ class CustomerOrder(TimestampMixin, Base):
     delivery_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     preferred_delivery_time: Mapped[str | None] = mapped_column(String(100), nullable=True)
     shop_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_by_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    payment_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     sale_id: Mapped[int | None] = mapped_column(ForeignKey("sales.id"), nullable=True, unique=True)
     customer_notified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     items: Mapped[list["CustomerOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
-    customer: Mapped["Customer | None"] = relationship()
+    customer: Mapped["Customer | None"] = relationship(back_populates="orders")
+    events: Mapped[list["CustomerOrderEvent"]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
+
+
+class CustomerOrderEvent(TimestampMixin, Base):
+    __tablename__ = "customer_order_events"
+    __table_args__ = (
+        Index("ix_customer_order_events_order_created", "order_id", "created_at"),
+        Index("ix_customer_order_events_shop_created", "shop_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("customer_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id"), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    to_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    order: Mapped[CustomerOrder] = relationship(back_populates="events")
+    actor: Mapped["User | None"] = relationship()
 
 
 class CustomerOrderItem(TimestampMixin, Base):

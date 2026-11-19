@@ -18,7 +18,7 @@ from app.models.bulk_preset import BulkPreset
 from app.models.billing import BillingPayment, BillingPaymentStatus, BillingPlan, Subscription, SubscriptionStatus
 from app.models.platform import PlatformAuditLog, PlatformUser
 from app.models.customer_order import (
-    CustomerOrder, CustomerOrderItem, CustomerOrderStatus, OrderFulfilment, OrderPaymentMethod, OrderPaymentStatus,
+    CustomerOrder, CustomerOrderEvent, CustomerOrderItem, CustomerOrderStatus, OrderFulfilment, OrderPaymentMethod, OrderPaymentStatus,
 )
 from app.models.order_reservation import OrderReservation, ReservationStatus
 from app.models.notification import NotificationChannel, NotificationEvent, NotificationStatus
@@ -31,7 +31,7 @@ __all__ = [
     "StockLot", "StockLotAllocation",
     "BillingPlan", "Subscription", "SubscriptionStatus",
     "PlatformAuditLog", "PlatformUser",
-    "CustomerOrder", "CustomerOrderItem", "CustomerOrderStatus", "OrderFulfilment", "OrderPaymentMethod", "OrderPaymentStatus",
+    "CustomerOrder", "CustomerOrderEvent", "CustomerOrderItem", "CustomerOrderStatus", "OrderFulfilment", "OrderPaymentMethod", "OrderPaymentStatus",
     "OrderReservation", "ReservationStatus",
     "NotificationChannel", "NotificationEvent", "NotificationStatus",
 ]

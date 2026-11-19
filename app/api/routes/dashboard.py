@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from app.api.deps import require_cashier, require_manager
 from app.core.database import get_db
 from app.models.cash_session import CashSession, SessionStatus
+from app.models.customer_order import CustomerOrder, CustomerOrderStatus, OrderPaymentStatus
 from app.models.expense import Expense
 from app.models.product import Product
 from app.models.sale import Sale, SaleStatus
@@ -17,6 +18,7 @@ from app.models.variant import Variant
 from app.schemas.dashboard import (
     CashierDashboardSummary,
     CreditSaleSummary,
+    DashboardOrderSummary,
     DashboardSummary,
     TopProduct,
 )
@@ -24,6 +26,60 @@ from app.services.reporting import summarize_period
 from app.services.cash_sessions import get_open_session
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+
+def _online_order_summary(db: Session, shop_id: int) -> dict:
+    terminal_statuses = (
+        CustomerOrderStatus.COMPLETED,
+        CustomerOrderStatus.REJECTED,
+        CustomerOrderStatus.CANCELLED,
+    )
+    pending_count = db.scalar(
+        select(func.count(CustomerOrder.id)).where(
+            CustomerOrder.shop_id == shop_id,
+            CustomerOrder.status == CustomerOrderStatus.PENDING,
+        )
+    ) or 0
+    active_count = db.scalar(
+        select(func.count(CustomerOrder.id)).where(
+            CustomerOrder.shop_id == shop_id,
+            CustomerOrder.status.not_in(terminal_statuses),
+        )
+    ) or 0
+    awaiting_payment_count = db.scalar(
+        select(func.count(CustomerOrder.id)).where(
+            CustomerOrder.shop_id == shop_id,
+            CustomerOrder.payment_status != OrderPaymentStatus.PAID,
+            CustomerOrder.status.not_in(
+                (CustomerOrderStatus.REJECTED, CustomerOrderStatus.CANCELLED)
+            ),
+        )
+    ) or 0
+    recent_orders = db.scalars(
+        select(CustomerOrder)
+        .where(CustomerOrder.shop_id == shop_id)
+        .order_by(CustomerOrder.created_at.desc(), CustomerOrder.id.desc())
+        .limit(6)
+    ).all()
+    return {
+        "pending_orders_count": pending_count,
+        "active_orders_count": active_count,
+        "orders_awaiting_payment_count": awaiting_payment_count,
+        "recent_orders": [
+            DashboardOrderSummary(
+                id=order.id,
+                order_number=order.order_number,
+                customer_name=order.customer_name,
+                status=order.status,
+                fulfilment=order.fulfilment,
+                payment_method=order.payment_method,
+                payment_status=order.payment_status,
+                total=order.total,
+                created_at=order.created_at,
+            )
+            for order in recent_orders
+        ],
+    }
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -82,6 +138,7 @@ def dashboard_summary(
         credit_sales_total=credit_sales_total,
         credit_sales_count=credit_sales_count,
         recent_credit_sales=credit_sale_summaries,
+        **_online_order_summary(db, user.shop_id),
         expense_total=result["expense_total"],
         staff_consumption_total=result["staff_consumption_total"],
         net_sales=result["net_sales"],
@@ -170,4 +227,5 @@ def cashier_dashboard_summary(
         current_session=get_open_session(db, user.shop_id),
         recent_sales=recent_sales,
         recent_sessions=recent_sessions,
+        **_online_order_summary(db, user.shop_id),
     )

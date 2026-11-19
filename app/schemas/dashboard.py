@@ -4,6 +4,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict
 
 from app.models.sale import PaymentMethod, SaleStatus
+from app.models.customer_order import CustomerOrderStatus, OrderFulfilment, OrderPaymentMethod, OrderPaymentStatus
 from app.schemas.cash_session import CashSessionRead
 
 
@@ -23,12 +24,28 @@ class CreditSaleSummary(BaseModel):
     created_at: datetime
 
 
+class DashboardOrderSummary(BaseModel):
+    id: int
+    order_number: str
+    customer_name: str
+    status: CustomerOrderStatus
+    fulfilment: OrderFulfilment
+    payment_method: OrderPaymentMethod
+    payment_status: OrderPaymentStatus
+    total: Decimal
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     date: str
     total_sales: Decimal
     credit_sales_total: Decimal
     credit_sales_count: int
     recent_credit_sales: list[CreditSaleSummary]
+    pending_orders_count: int
+    active_orders_count: int
+    orders_awaiting_payment_count: int
+    recent_orders: list[DashboardOrderSummary]
     expense_total: Decimal
     staff_consumption_total: Decimal = Decimal("0.00")
     net_sales: Decimal
@@ -62,3 +79,7 @@ class CashierDashboardSummary(BaseModel):
     current_session: CashSessionRead | None
     recent_sales: list[CashierSaleSummary]
     recent_sessions: list[CashSessionRead]
+    pending_orders_count: int
+    active_orders_count: int
+    orders_awaiting_payment_count: int
+    recent_orders: list[DashboardOrderSummary]

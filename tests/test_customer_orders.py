@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import Customer, CustomerOrder, Product, Shop, Unit, User, UserRole, Variant
+from app.models import Customer, CustomerOrder, Product, Shop, StockLot, Unit, User, UserRole, Variant
 from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 
 
@@ -89,7 +89,7 @@ def public_order_client() -> Generator[tuple[TestClient, int, sessionmaker], Non
 
 
 def test_public_order_is_created_with_human_readable_number(public_order_client):
-    client, variant_id, _ = public_order_client
+    client, variant_id, test_session = public_order_client
 
     response = client.post(
         "/public/shops/order-test/orders",
@@ -108,6 +108,11 @@ def test_public_order_is_created_with_human_readable_number(public_order_client)
     assert body["order_number"] == "OR-1001"
     assert body["items"][0]["quantity"] == 2
     assert body["total"] == "50.00"
+    with test_session() as db:
+        order = db.query(CustomerOrder).filter_by(order_number=body["order_number"]).one()
+        customer = db.query(Customer).filter_by(id=order.customer_id).one()
+        assert customer.full_name == "Amina Otieno"
+        assert customer.phone_normalized == "254712345678"
 
 
 def test_public_order_links_one_customer_with_matching_normalized_phone(public_order_client):
@@ -136,7 +141,7 @@ def test_public_order_links_one_customer_with_matching_normalized_phone(public_o
         assert order.customer_id == customer_id
 
 
-def test_public_order_does_not_guess_between_duplicate_customer_phones(public_order_client):
+def test_public_order_creates_reviewable_profile_for_duplicate_customer_phones(public_order_client):
     client, variant_id, test_session = public_order_client
     with test_session() as db:
         shop = db.query(Shop).filter_by(slug="order-test").one()
@@ -172,10 +177,18 @@ def test_public_order_does_not_guess_between_duplicate_customer_phones(public_or
     assert response.status_code == 201, response.text
     with test_session() as db:
         order = db.query(CustomerOrder).filter_by(order_number=response.json()["order_number"]).one()
-        assert order.customer_id is None
+        customer = db.query(Customer).filter_by(id=order.customer_id).one()
+        assert customer.id not in {
+            customer.id
+            for customer in db.query(Customer)
+            .filter_by(phone_normalized="254712345678")
+            .all()
+            if customer.full_name in {"Customer One", "Customer Two"}
+        }
+        assert customer.identity_review_required is True
 
 
-def test_adding_customer_links_earlier_guest_orders(public_order_client):
+def test_public_order_customer_profile_is_not_replaced_by_a_later_manual_profile(public_order_client):
     client, variant_id, test_session = public_order_client
     order_response = client.post(
         "/public/shops/order-test/orders",
@@ -189,6 +202,11 @@ def test_adding_customer_links_earlier_guest_orders(public_order_client):
         },
     )
     assert order_response.status_code == 201, order_response.text
+    with test_session() as db:
+        original_order = db.query(CustomerOrder).filter_by(
+            order_number=order_response.json()["order_number"]
+        ).one()
+        original_customer_id = original_order.customer_id
 
     customer_response = client.post(
         "/customers",
@@ -197,4 +215,149 @@ def test_adding_customer_links_earlier_guest_orders(public_order_client):
     assert customer_response.status_code == 201, customer_response.text
     with test_session() as db:
         order = db.query(CustomerOrder).filter_by(order_number=order_response.json()["order_number"]).one()
-        assert order.customer_id == customer_response.json()["id"]
+        assert order.customer_id == original_customer_id
+        assert order.customer_id != customer_response.json()["id"]
+
+
+def test_order_fulfilment_requires_recipient_and_payment_before_closing(public_order_client):
+    client, variant_id, test_session = public_order_client
+    with test_session() as db:
+        db.add(
+            StockLot(
+                variant_id=variant_id,
+                received_quantity=10,
+                remaining_quantity=10,
+                unit_cost="10.00",
+            )
+        )
+        db.commit()
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    order = client.get("/orders").json()[0]
+
+    dashboard = client.get("/dashboard/cashier-summary")
+    assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["pending_orders_count"] == 1
+    assert dashboard.json()["orders_awaiting_payment_count"] == 1
+    assert dashboard.json()["recent_orders"][0]["order_number"] == order["order_number"]
+
+    for next_status in ("accepted", "preparing", "out_for_delivery"):
+        update = client.patch(f"/orders/{order['id']}", json={"status": next_status})
+        assert update.status_code == 200, update.text
+
+    missing_recipient = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "delivered"},
+    )
+    assert missing_recipient.status_code == 422
+
+    delivered = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "delivered", "received_by_name": "Amina Otieno"},
+    )
+    assert delivered.status_code == 200, delivered.text
+    assert delivered.json()["received_by_name"] == "Amina Otieno"
+
+    unpaid_close = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "completed"},
+    )
+    assert unpaid_close.status_code == 409
+
+    no_till_payment = client.post(
+        f"/orders/{order['id']}/payment/record",
+        json={"reference": "CASH-001"},
+    )
+    assert no_till_payment.status_code == 422
+    opened_session = client.post("/cash-sessions/open", json={})
+    assert opened_session.status_code == 201, opened_session.text
+
+    paid = client.post(
+        f"/orders/{order['id']}/payment/record",
+        json={"reference": "CASH-001"},
+    )
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["payment_status"] == "paid"
+    assert paid.json()["payment_reference"] == "CASH-001"
+
+    completed = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "completed"},
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["sale_id"] is not None
+
+    history = client.get(f"/orders/{order['id']}/history")
+    assert history.status_code == 200, history.text
+    event_types = [event["event_type"] for event in history.json()]
+    assert event_types.count("status_changed") == 5
+    assert "payment_confirmed" in event_types
+    assert history.json()[0]["event_type"] == "order_placed"
+
+    with test_session() as db:
+        persisted_order = db.query(CustomerOrder).filter_by(id=order["id"]).one()
+        assert persisted_order.payment_status.value == "paid"
+        assert persisted_order.paid_by_user_id is not None
+
+
+def test_customer_order_history_endpoint_shows_linked_online_orders(public_order_client):
+    client, variant_id, _ = public_order_client
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    order = client.get("/orders").json()[0]
+
+    customer_orders = client.get(f"/customers/{order['customer_id']}/orders")
+    assert customer_orders.status_code == 200, customer_orders.text
+    assert [item["order_number"] for item in customer_orders.json()] == [order["order_number"]]
+
+
+def test_manual_mpesa_confirmation_is_audited_and_cannot_be_overwritten(public_order_client):
+    client, variant_id, _ = public_order_client
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "manual_mpesa",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    order = client.get("/orders").json()[0]
+
+    paid = client.post(
+        f"/orders/{order['id']}/payment/confirm",
+        params={"receipt_number": "RCP123"},
+    )
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["payment_status"] == "paid"
+    assert paid.json()["payment_reference"] == "RCP123"
+    assert paid.json()["paid_by_user_id"] is not None
+
+    conflicting_receipt = client.post(
+        f"/orders/{order['id']}/payment/confirm",
+        params={"receipt_number": "RCP456"},
+    )
+    assert conflicting_receipt.status_code == 409

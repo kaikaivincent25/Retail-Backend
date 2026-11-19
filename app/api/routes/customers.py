@@ -11,6 +11,7 @@ from app.models.customer_activity import CustomerActivity
 from app.models.customer_order import CustomerOrder
 from app.models.sale import Sale, SaleStatus
 from app.models.user import User, UserRole
+from app.schemas.customer_order import CustomerOrderRead
 from app.schemas.customer import (
     CustomerActivityCreate,
     CustomerActivityRead,
@@ -190,6 +191,34 @@ def get_customer(
     ):
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
+
+
+@router.get("/{customer_id}/orders", response_model=list[CustomerOrderRead])
+def list_customer_order_history(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_cashier),
+):
+    customer = db.scalar(
+        select(Customer).where(
+            Customer.id == customer_id,
+            Customer.shop_id == user.shop_id,
+        )
+    )
+    if customer is None or (
+        user.role == UserRole.CASHIER and not customer.is_active
+    ):
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return db.scalars(
+        select(CustomerOrder)
+        .options(selectinload(CustomerOrder.items))
+        .where(
+            CustomerOrder.customer_id == customer_id,
+            CustomerOrder.shop_id == user.shop_id,
+        )
+        .order_by(CustomerOrder.created_at.desc(), CustomerOrder.id.desc())
+        .limit(200)
+    ).all()
 
 
 @router.patch("/{customer_id}", response_model=CustomerRead)
