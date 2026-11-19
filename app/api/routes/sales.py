@@ -1,4 +1,4 @@
-from datetime import date, date as date_type, datetime, time, timezone
+from datetime import date as date_type
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_cashier, require_manager
+from app.core.business_time import business_day_bounds, business_today
 from app.core.database import get_db
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.models.shop import Shop
@@ -357,12 +358,14 @@ def list_sales(
         query = query.where(Sale.cashier_id == cashier_id)
 
     if start_date is not None:
+        start, _ = business_day_bounds(start_date)
         query = query.where(
-            Sale.created_at >= datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+            Sale.created_at >= start
         )
     if end_date is not None:
+        _, end = business_day_bounds(end_date)
         query = query.where(
-            Sale.created_at <= datetime.combine(end_date, time.max, tzinfo=timezone.utc)
+            Sale.created_at < end
         )
 
     query = query.order_by(Sale.created_at.desc()).offset(skip).limit(limit)
@@ -374,11 +377,12 @@ def sales_today(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
-    start = datetime.combine(date.today(), time.min, tzinfo=timezone.utc)
-    end = datetime.combine(date.today(), time.max, tzinfo=timezone.utc)
+    today = business_today()
+    start, _ = business_day_bounds(today)
+    _, end = business_day_bounds(today)
 
     query = _sale_query_for_shop(user.shop_id).where(
-        Sale.created_at >= start, Sale.created_at <= end
+        Sale.created_at >= start, Sale.created_at < end
     )
     query = query.order_by(Sale.created_at.desc())
     return db.scalars(query).all()

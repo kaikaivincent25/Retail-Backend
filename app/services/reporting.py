@@ -1,9 +1,10 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.business_time import business_day_bounds
 from app.models.product import Product
 from app.models.cash_session import CashSession
 from app.models.expense import Expense
@@ -18,7 +19,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             Sale.shop_id == shop_id,
             Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            Sale.created_at < end_dt,
         )
     ) or Decimal("0.00")
     cogs = db.scalar(
@@ -28,7 +29,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             Sale.shop_id == shop_id,
             Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            Sale.created_at < end_dt,
         )
     ) or Decimal("0.00")
     expenses = db.scalar(
@@ -37,7 +38,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
         .where(
             CashSession.shop_id == shop_id,
             Expense.created_at >= start_dt,
-            Expense.created_at <= end_dt,
+            Expense.created_at < end_dt,
         )
     ) or Decimal("0.00")
     stock_use = db.scalar(
@@ -48,7 +49,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             Product.shop_id == shop_id,
             StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
         )
     ) or Decimal("0.00")
     stock_loss = db.scalar(
@@ -64,7 +65,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             ),
             StockMovement.unit_cost_at_time.is_not(None),
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
         )
     ) or Decimal("0.00")
     incomplete_sales = db.scalar(
@@ -74,7 +75,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             Sale.shop_id == shop_id,
             Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            Sale.created_at < end_dt,
             SaleItem.cost_is_known_at_sale.is_(False),
         )
     ) or 0
@@ -92,7 +93,7 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             ),
             StockMovement.unit_cost_at_time.is_(None),
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
         )
     ) or 0
     profit = total_sales - cogs - expenses - stock_use - stock_loss
@@ -110,14 +111,14 @@ def summarize_period(
     end: date,
     include_report_details: bool = True,
 ) -> dict:
-    start_dt = datetime.combine(start, time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(end, time.max, tzinfo=timezone.utc)
+    start_dt, _ = business_day_bounds(start)
+    _, end_dt = business_day_bounds(end)
 
     sales_query = select(Sale).where(
         Sale.shop_id == shop_id,
         Sale.status == SaleStatus.COMPLETED,
         Sale.created_at >= start_dt,
-        Sale.created_at <= end_dt,
+        Sale.created_at < end_dt,
     )
     sales = db.scalars(sales_query).all()
 
@@ -130,7 +131,7 @@ def summarize_period(
         .where(
             CashSession.shop_id == shop_id,
             Expense.created_at >= start_dt,
-            Expense.created_at <= end_dt,
+            Expense.created_at < end_dt,
         )
     )
     expense_total = db.scalar(expense_query) or Decimal("0.00")
@@ -147,7 +148,7 @@ def summarize_period(
             Product.shop_id == shop_id,
             StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
         )
     ) or Decimal("0.00")
 
@@ -156,7 +157,7 @@ def summarize_period(
         .join(Sale, Sale.id == SaleItem.sale_id)
         .where(
             Sale.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED,
-            Sale.created_at >= start_dt, Sale.created_at <= end_dt,
+            Sale.created_at >= start_dt, Sale.created_at < end_dt,
         )
     )
     cost_of_goods_sold = db.scalar(cogs_query) or Decimal("0.00")
@@ -167,7 +168,7 @@ def summarize_period(
             Sale.shop_id == shop_id,
             Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start_dt,
-            Sale.created_at <= end_dt,
+            Sale.created_at < end_dt,
             SaleItem.cost_is_known_at_sale.is_(False),
         )
     ) or 0
@@ -185,7 +186,7 @@ def summarize_period(
                 & (StockMovement.quantity < 0),
             ),
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
             StockMovement.unit_cost_at_time.is_(None),
         )
     ) or 0
@@ -202,7 +203,7 @@ def summarize_period(
                 & (StockMovement.quantity < 0),
             ),
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
             StockMovement.unit_cost_at_time.is_not(None),
         )
     ) or Decimal("0.00")
@@ -235,7 +236,7 @@ def summarize_period(
         .join(Product, Product.id == Variant.product_id)
         .where(
             Product.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED,
-            Sale.created_at >= start_dt, Sale.created_at <= end_dt,
+            Sale.created_at >= start_dt, Sale.created_at < end_dt,
         )
         .group_by(Variant.id, Variant.name)
         .order_by(func.sum(SaleItem.quantity).desc())
@@ -285,7 +286,7 @@ def summarize_period(
         select(func.date(Sale.created_at).label("day"), func.sum(Sale.total).label("total"))
         .where(
             Sale.shop_id == shop_id, Sale.status == SaleStatus.COMPLETED,
-            Sale.created_at >= start_dt, Sale.created_at <= end_dt,
+            Sale.created_at >= start_dt, Sale.created_at < end_dt,
         )
         .group_by(func.date(Sale.created_at))
         .order_by(func.date(Sale.created_at))
@@ -307,7 +308,7 @@ def summarize_period(
         .where(
             CashSession.shop_id == shop_id,
             Expense.created_at >= start_dt,
-            Expense.created_at <= end_dt,
+            Expense.created_at < end_dt,
         )
         .group_by(func.date(Expense.created_at))
         .order_by(func.date(Expense.created_at))
@@ -340,7 +341,7 @@ def summarize_period(
             Product.shop_id == shop_id,
             StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
             StockMovement.created_at >= start_dt,
-            StockMovement.created_at <= end_dt,
+            StockMovement.created_at < end_dt,
         )
         .group_by(func.date(StockMovement.created_at))
         .order_by(func.date(StockMovement.created_at))
@@ -369,8 +370,8 @@ def summarize_period(
         previous_totals = _period_financial_totals(
             db,
             shop_id,
-            datetime.combine(previous_start, time.min, tzinfo=timezone.utc),
-            datetime.combine(previous_end, time.max, tzinfo=timezone.utc),
+            business_day_bounds(previous_start)[0],
+            business_day_bounds(previous_end)[1],
         )
         sales_change = total_sales - previous_totals["total_sales"]
         profit_change = estimated_profit - previous_totals["estimated_profit"]

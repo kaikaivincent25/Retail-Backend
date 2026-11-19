@@ -1,8 +1,11 @@
+import logging
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.business_time import business_day_bounds, business_today
 from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.models.cash_deposit import CashDeposit, DepositFrequency
@@ -12,6 +15,8 @@ from app.models.expense import Expense
 from app.models.shop import Shop
 from app.models.sale import PaymentMethod, Sale, SaleStatus
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 
 class CashSessionError(Exception):
@@ -187,6 +192,8 @@ def close_session(
     session: CashSession,
     closing_cash: Decimal,
     closed_by_user_id: int | None = None,
+    *,
+    automatic: bool = False,
 ) -> CashSession:
     session = db.scalar(
         select(CashSession)
@@ -200,7 +207,7 @@ def close_session(
 
     breakdown = get_cash_session_breakdown(db, session)
     expected = breakdown["expected_cash"]
-    if closing_cash > expected:
+    if not automatic and closing_cash > expected:
         db.rollback()
         raise CashSessionError(
             f"Closing cash cannot exceed the expected amount of {expected}."
@@ -214,6 +221,7 @@ def close_session(
     session.expected_cash = expected
     session.difference = closing_cash - expected
     session.status = SessionStatus.CLOSED
+    session.auto_closed = automatic
     session.closed_at = func.now()
 
     log_activity(
@@ -221,12 +229,59 @@ def close_session(
         user_id=closed_by_user_id or session.user_id,
         action=ActivityAction.CASH_SESSION_CLOSED,
         entity_type="cash_session", entity_id=session.id,
-        description=f"difference: {session.difference}",
+        description=(
+            "Automatically closed at local midnight; expected cash was used as "
+            f"a provisional count. difference: {session.difference}"
+            if automatic
+            else f"difference: {session.difference}"
+        ),
     )
 
     db.commit()
     db.refresh(session)
     return session
+
+
+def auto_close_expired_sessions(
+    db: Session,
+    *,
+    now: datetime | None = None,
+) -> int:
+    cutoff, _ = business_day_bounds(business_today(now))
+    session_ids = db.scalars(
+        select(CashSession.id).where(
+            CashSession.status == SessionStatus.OPEN,
+            CashSession.created_at < cutoff,
+        )
+    ).all()
+    closed_count = 0
+
+    for session_id in session_ids:
+        session = db.scalar(
+            select(CashSession)
+            .where(
+                CashSession.id == session_id,
+                CashSession.status == SessionStatus.OPEN,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if session is None:
+            continue
+        expected_cash = get_cash_session_breakdown(db, session)["expected_cash"]
+        try:
+            close_session(
+                db,
+                session,
+                closing_cash=max(expected_cash, Decimal("0.00")),
+                closed_by_user_id=session.user_id,
+                automatic=True,
+            )
+        except CashSessionError:
+            logger.info("Cash session %s was closed by another request", session_id)
+            continue
+        closed_count += 1
+
+    return closed_count
 
 
 def reconcile_closed_session(

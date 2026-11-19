@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "Duka Retail System"
     ENVIRONMENT: str = "development"
     CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,https://retailshop-information-system.vercel.app"
+    BUSINESS_TIMEZONE: str = "Africa/Nairobi"
     DATABASE_URL: str
     TEST_DATABASE_URL: str = ""
 

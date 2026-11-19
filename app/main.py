@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import secrets
 from pathlib import Path
@@ -31,8 +32,27 @@ from app.api.routes import (
     variants,
 )
 from app.core.config import settings
+from app.core.database import SessionLocal
+from app.services.cash_sessions import auto_close_expired_sessions
 
 logger = logging.getLogger(__name__)
+cash_session_auto_close_task: asyncio.Task | None = None
+
+
+def _auto_close_expired_cash_sessions() -> int:
+    with SessionLocal() as db:
+        return auto_close_expired_sessions(db)
+
+
+async def _cash_session_auto_close_worker() -> None:
+    while True:
+        try:
+            closed_count = await asyncio.to_thread(_auto_close_expired_cash_sessions)
+            if closed_count:
+                logger.info("Automatically closed %s expired cash session(s)", closed_count)
+        except Exception:
+            logger.exception("Automatic cash session closing failed")
+        await asyncio.sleep(30)
 
 
 def run_database_migrations() -> None:
@@ -78,11 +98,26 @@ async def add_security_headers(request: Request, call_next):
 
 @app.on_event("startup")
 def startup() -> None:
+    global cash_session_auto_close_task
     try:
         run_database_migrations()
     except Exception:
         logger.exception("Database migration failed during startup")
         raise
+    if settings.ENVIRONMENT.lower() != "test":
+        cash_session_auto_close_task = asyncio.create_task(
+            _cash_session_auto_close_worker()
+        )
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    if cash_session_auto_close_task is not None:
+        cash_session_auto_close_task.cancel()
+        try:
+            await cash_session_auto_close_task
+        except asyncio.CancelledError:
+            pass
 
 
 configured_origins = [

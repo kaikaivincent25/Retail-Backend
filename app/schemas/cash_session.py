@@ -37,6 +37,7 @@ class CashSessionRead(BaseModel):
     expected_cash: Decimal | None
     difference: Decimal | None
     status: SessionStatus
+    auto_closed: bool = False
     created_at: datetime
     closed_at: datetime | None
     recount_reason: str | None = None

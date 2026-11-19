@@ -1,5 +1,6 @@
 from collections.abc import Generator
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,9 +11,28 @@ from sqlalchemy.pool import StaticPool
 from app.api.deps import get_current_user
 from app.core.database import Base, get_db
 from app.main import app
-from app.models import Customer, CustomerOrder, Product, Shop, StockLot, Unit, User, UserRole, Variant
+from app.models import (
+    CashSession,
+    Customer,
+    CustomerOrder,
+    Product,
+    Sale,
+    Shop,
+    StockLot,
+    Unit,
+    User,
+    UserRole,
+    Variant,
+)
+from app.models.cash_session import SessionStatus
 from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
 from app.models.customer_order import OrderPaymentStatus
+from app.core.business_time import (
+    BUSINESS_TIMEZONE,
+    business_day_bounds,
+    business_today,
+)
+from app.services.cash_sessions import auto_close_expired_sessions
 
 
 @pytest.fixture
@@ -114,6 +134,43 @@ def test_public_order_is_created_with_human_readable_number(public_order_client)
         customer = db.query(Customer).filter_by(id=order.customer_id).one()
         assert customer.full_name == "Amina Otieno"
         assert customer.phone_normalized == "254712345678"
+
+
+def test_business_day_bounds_use_nairobi_midnight():
+    start, end = business_day_bounds(date(2026, 11, 19))
+
+    assert start == datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 11, 19, 21, 0, tzinfo=timezone.utc)
+
+
+def test_auto_close_uses_provisional_expected_cash_and_carries_it_forward(public_order_client):
+    client, _, test_session = public_order_client
+    with test_session() as db:
+        shop = db.query(Shop).filter_by(slug="order-test").one()
+        user = db.query(User).filter_by(username="order_test_cashier").one()
+        session = CashSession(
+            shop_id=shop.id,
+            user_id=user.id,
+            opening_cash=Decimal("125.00"),
+            status=SessionStatus.OPEN,
+            created_at=datetime(2026, 1, 1, 20, 59, tzinfo=timezone.utc),
+        )
+        db.add(session)
+        db.commit()
+
+        assert auto_close_expired_sessions(
+            db,
+            now=datetime(2026, 1, 2, 0, 0, 30, tzinfo=BUSINESS_TIMEZONE),
+        ) == 1
+        db.refresh(session)
+        assert session.status == SessionStatus.CLOSED
+        assert session.closing_cash == 125
+        assert session.expected_cash == 125
+        assert session.auto_closed is True
+
+    opened = client.post("/cash-sessions/open", json={})
+    assert opened.status_code == 201, opened.text
+    assert opened.json()["opening_cash"] == "125.00"
 
 
 def test_public_order_links_one_customer_with_matching_normalized_phone(public_order_client):
@@ -297,6 +354,14 @@ def test_order_fulfilment_requires_recipient_and_payment_before_closing(public_o
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["sale_id"] is not None
+    with test_session() as db:
+        sale = db.query(Sale).filter_by(id=completed.json()["sale_id"]).one()
+        sale.created_at = business_day_bounds(business_today())[0] + timedelta(hours=1)
+        db.commit()
+    completed_day_summary = client.get("/dashboard/cashier-summary")
+    assert completed_day_summary.status_code == 200, completed_day_summary.text
+    assert completed_day_summary.json()["total_sales"] == "25.00"
+    assert completed_day_summary.json()["transaction_count"] == 1
 
     history = client.get(f"/orders/{order['id']}/history")
     assert history.status_code == 200, history.text

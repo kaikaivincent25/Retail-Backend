@@ -1,4 +1,3 @@
-from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends
@@ -6,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import require_cashier, require_manager
+from app.core.business_time import business_day_bounds, business_today
 from app.core.database import get_db
 from app.models.cash_session import CashSession, SessionStatus
 from app.models.customer_order import CustomerOrder, CustomerOrderStatus, OrderPaymentStatus
@@ -87,9 +87,9 @@ def dashboard_summary(
     db: Session = Depends(get_db),
     user: User = Depends(require_manager),
 ):
-    today = date.today()
-    start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(today, time.max, tzinfo=timezone.utc)
+    today = business_today()
+    start, _ = business_day_bounds(today)
+    _, end = business_day_bounds(today)
     result = summarize_period(db, user.shop_id, today, today, include_report_details=False)
     credit_sales_total, credit_sales_count = db.execute(
         select(
@@ -100,7 +100,7 @@ def dashboard_summary(
             Sale.status == SaleStatus.COMPLETED,
             Sale.is_credit.is_(True),
             Sale.created_at >= start,
-            Sale.created_at <= end,
+            Sale.created_at < end,
         )
     ).one()
     recent_credit_sales = db.scalars(
@@ -111,7 +111,7 @@ def dashboard_summary(
             Sale.status == SaleStatus.COMPLETED,
             Sale.is_credit.is_(True),
             Sale.created_at >= start,
-            Sale.created_at <= end,
+            Sale.created_at < end,
         )
         .order_by(Sale.created_at.desc(), Sale.id.desc())
         .limit(8)
@@ -158,9 +158,9 @@ def cashier_dashboard_summary(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
-    today = date.today()
-    start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-    end = datetime.combine(today, time.max, tzinfo=timezone.utc)
+    today = business_today()
+    start, _ = business_day_bounds(today)
+    _, end = business_day_bounds(today)
     shop_sales = (Sale.shop_id == user.shop_id,)
 
     total_sales, transaction_count = db.execute(
@@ -171,7 +171,7 @@ def cashier_dashboard_summary(
             *shop_sales,
             Sale.status == SaleStatus.COMPLETED,
             Sale.created_at >= start,
-            Sale.created_at <= end,
+            Sale.created_at < end,
         )
     ).one()
 
@@ -181,7 +181,7 @@ def cashier_dashboard_summary(
         .where(
             CashSession.shop_id == user.shop_id,
             Expense.created_at >= start,
-            Expense.created_at <= end,
+            Expense.created_at < end,
         )
     ) or 0
 
@@ -197,7 +197,7 @@ def cashier_dashboard_summary(
             Product.shop_id == user.shop_id,
             StockMovement.movement_type == MovementType.STAFF_CONSUMPTION,
             StockMovement.created_at >= start,
-            StockMovement.created_at <= end,
+            StockMovement.created_at < end,
         )
     ) or 0
 

@@ -44,6 +44,9 @@ class CashSession(TimestampMixin, Base):
     recounted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recounted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_closed: Mapped[bool] = mapped_column(
+        default=False, server_default="false", nullable=False
+    )
 
     status: Mapped[SessionStatus] = mapped_column(
         Enum(SessionStatus, name="session_status", values_callable=lambda e: [m.value for m in e]),
