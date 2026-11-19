@@ -124,7 +124,7 @@ def test_checkout_becomes_available_only_after_trial_expiry(billing_client, monk
         subscription.current_period_end = subscription.trial_ends_at
         db.commit()
 
-    def fake_checkout(db, *, shop_id, user_id, plan, phone_number):
+    def fake_checkout(db, *, shop_id, user_id, plan, phone_number, amount=None, period_days=30):
         return SimpleNamespace(
             id=1,
             phone_number=phone_number,

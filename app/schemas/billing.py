@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
 
 from app.models.billing import SubscriptionStatus
 
@@ -32,6 +33,7 @@ class BillingRead(BaseModel):
 class MpesaCheckoutCreate(BaseModel):
     plan_code: str = Field(min_length=2, max_length=40)
     phone_number: str = Field(min_length=9, max_length=20)
+    billing_cycle: Literal["monthly", "annual"] = "monthly"
 
 
 class MpesaCheckoutRead(BaseModel):

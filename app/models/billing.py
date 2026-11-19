@@ -90,3 +90,4 @@ class BillingPayment(TimestampMixin, Base):
     merchant_request_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     receipt_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     provider_result_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    billing_cycle: Mapped[str] = mapped_column(String(10), nullable=False, default="monthly", server_default="monthly")

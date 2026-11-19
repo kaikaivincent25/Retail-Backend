@@ -41,8 +41,6 @@ from app.services.sales import (
     create_pending_mpesa_sale,
     release_pending_sale,
 )
-from app.services.billing import require_feature
-
 router = APIRouter(prefix="/sales", tags=["Sales"])
 
 
@@ -114,7 +112,6 @@ def create_mpesa_sale(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
-    require_feature(db, user.shop_id, "mpesa.tools")
     session = get_open_session(db, user.shop_id, lock=True)
     if session is None:
         raise HTTPException(
@@ -163,7 +160,6 @@ def create_manual_mpesa_sale(
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
-    require_feature(db, user.shop_id, "mpesa.tools")
     session = get_open_session(db, user.shop_id, lock=True)
     if session is None:
         raise HTTPException(

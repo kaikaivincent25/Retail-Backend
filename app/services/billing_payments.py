@@ -14,16 +14,25 @@ logger = logging.getLogger(__name__)
 
 
 def create_billing_payment(
-    db: Session, *, shop_id: int, user_id: int, plan: BillingPlan, phone_number: str
+    db: Session,
+    *,
+    shop_id: int,
+    user_id: int,
+    plan: BillingPlan,
+    phone_number: str,
+    amount: int | None = None,
+    period_days: int = 30,
 ) -> BillingPayment:
     phone = normalize_phone_number(phone_number)
+    charge_amount = amount if amount is not None else plan.monthly_price
     payment = BillingPayment(
         shop_id=shop_id,
         user_id=user_id,
         plan_id=plan.id,
-        amount=Decimal(plan.monthly_price),
+        amount=Decimal(charge_amount),
         phone_number=phone,
         status=BillingPaymentStatus.PENDING,
+        billing_cycle="annual" if period_days == 365 else "monthly",
     )
     db.add(payment)
     db.flush()
@@ -103,7 +112,7 @@ def process_billing_stk_callback(db: Session, payload: dict[str, Any]) -> bool:
     subscription.trial_ends_at = None
     subscription.canceled_at = None
     subscription.current_period_start = start
-    subscription.current_period_end = start + timedelta(days=30)
+    subscription.current_period_end = start + timedelta(days=365 if payment.billing_cycle == "annual" else 30)
     subscription.grace_period_ends_at = None
     subscription.service_suspended = False
     db.commit()

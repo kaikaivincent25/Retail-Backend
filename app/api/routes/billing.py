@@ -138,11 +138,25 @@ def create_mpesa_checkout(
     subscription, _ = get_subscription(db, user.shop_id)
     if current_status(subscription) == SubscriptionStatus.TRIALING:
         raise HTTPException(status_code=409, detail="Payment is available only after your trial has fully ended")
-    if plan.monthly_price <= 0:
+    if payload.billing_cycle == "annual":
+        if plan.annual_price is None or plan.annual_price <= 0:
+            raise HTTPException(status_code=422, detail="Annual billing is not available for this plan")
+        amount = plan.annual_price
+        period_days = 365
+    else:
+        amount = plan.monthly_price
+        period_days = 30
+    if amount <= 0:
         raise HTTPException(status_code=422, detail="This plan cannot be paid through M-Pesa")
     try:
         payment = create_billing_payment(
-            db, shop_id=user.shop_id, user_id=user.id, plan=plan, phone_number=payload.phone_number
+            db,
+            shop_id=user.shop_id,
+            user_id=user.id,
+            plan=plan,
+            phone_number=payload.phone_number,
+            amount=amount,
+            period_days=period_days,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -153,7 +167,7 @@ def create_mpesa_checkout(
     return MpesaCheckoutRead(
         payment_id=payment.id,
         plan_name=plan.name,
-        amount=plan.monthly_price,
+        amount=amount,
         phone_number=payment.phone_number,
         status=payment.status.value,
         message="STK Push sent. Complete the payment on the phone, then return to Billing to refresh the status.",

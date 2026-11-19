@@ -11,8 +11,6 @@ TRIAL_DAYS = 45
 MANAGEABLE_FEATURES = frozenset({
     "audit.logs",
     "expenses",
-    "inventory.reports",
-    "mpesa.tools",
     "online_store",
     "reports.full",
 })
