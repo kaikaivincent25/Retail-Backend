@@ -247,6 +247,53 @@ def track_customer_order(public_token: str, db: Session = Depends(get_db)):
     return _public_order(order)
 
 
+@public_router.post("/orders/{public_token}/cancel", response_model=PublicOrderRead)
+def cancel_public_order(public_token: str, db: Session = Depends(get_db)):
+    order = db.scalar(
+        _order_query(None)
+        .where(CustomerOrder.public_token == public_token)
+        .with_for_update()
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.payment_status == OrderPaymentStatus.PAID:
+        raise HTTPException(
+            status_code=409,
+            detail="This order has already been paid and cannot be cancelled online. Please contact the shop.",
+        )
+    if order.payment_status == OrderPaymentStatus.INITIATED:
+        raise HTTPException(
+            status_code=409,
+            detail="An M-Pesa payment is still in progress. Wait for its result before cancelling.",
+        )
+    if order.status not in {CustomerOrderStatus.PENDING, CustomerOrderStatus.ACCEPTED}:
+        raise HTTPException(
+            status_code=409,
+            detail="This order can no longer be cancelled online. Please contact the shop.",
+        )
+
+    previous_status = order.status
+    order.status = CustomerOrderStatus.CANCELLED
+    release_order_reservations(db, order.id, None)
+    _record_order_event(
+        db,
+        order,
+        "status_changed",
+        None,
+        from_status=previous_status,
+        to_status=CustomerOrderStatus.CANCELLED,
+        details="Customer cancelled the order through the public shop.",
+    )
+    queue_order_notification(
+        db,
+        order,
+        "order_cancelled",
+        f"{order.order_number} was cancelled by the customer.",
+    )
+    db.commit()
+    return _public_order(db.scalar(_order_query(order.id)))
+
+
 @private_router.get("", response_model=list[CustomerOrderRead])
 def list_customer_orders(
     order_status: CustomerOrderStatus | None = Query(None, alias="status"),

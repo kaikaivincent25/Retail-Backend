@@ -12,6 +12,7 @@ from app.core.database import Base, get_db
 from app.main import app
 from app.models import Customer, CustomerOrder, Product, Shop, StockLot, Unit, User, UserRole, Variant
 from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
+from app.models.customer_order import OrderPaymentStatus
 
 
 @pytest.fixture
@@ -361,3 +362,49 @@ def test_manual_mpesa_confirmation_is_audited_and_cannot_be_overwritten(public_o
         params={"receipt_number": "RCP456"},
     )
     assert conflicting_receipt.status_code == 409
+
+
+def test_customer_can_cancel_an_unpaid_order(public_order_client):
+    client, variant_id, _ = public_order_client
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    cancelled = client.post(f"/public/orders/{response.json()['public_token']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert client.get(f"/public/orders/{response.json()['public_token']}").json()["status"] == "cancelled"
+
+
+def test_customer_cannot_cancel_while_mpesa_payment_is_in_progress(public_order_client):
+    client, variant_id, test_session = public_order_client
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "manual_mpesa",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    token = response.json()["public_token"]
+    with test_session() as db:
+        order = db.query(CustomerOrder).filter_by(public_token=token).one()
+        order.payment_status = OrderPaymentStatus.INITIATED
+        db.commit()
+
+    cancelled = client.post(f"/public/orders/{token}/cancel")
+    assert cancelled.status_code == 409
+    assert "payment is still in progress" in cancelled.json()["detail"]
