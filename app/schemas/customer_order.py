@@ -95,6 +95,7 @@ class CustomerOrderRead(BaseModel):
     paid_at: datetime | None = None
     paid_by_user_id: int | None = None
     sale_id: int | None = None
+    customer_reminder_requested_at: datetime | None = None
     items: list[CustomerOrderItemRead]
     created_at: datetime
 
@@ -115,10 +116,17 @@ class PublicOrderRead(BaseModel):
     created_at: datetime
 
 
+class PublicOrderStatusUpdateRead(BaseModel):
+    status: CustomerOrderStatus
+    created_at: datetime
+
+
 class PublicOrderTrackingRead(BaseModel):
     order_number: str
     status: CustomerOrderStatus
     fulfilment: OrderFulfilment
     payment_status: OrderPaymentStatus
     created_at: datetime
-    updated_at: datetime
+    last_status_update_at: datetime
+    customer_reminder_requested_at: datetime | None = None
+    status_updates: list[PublicOrderStatusUpdateRead]

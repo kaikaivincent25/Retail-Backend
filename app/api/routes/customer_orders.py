@@ -1,6 +1,6 @@
 import secrets
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -55,12 +55,14 @@ from app.schemas.customer_order import (
     CustomerOrderEventRead,
     PublicOrderRead,
     PublicOrderTrackingRead,
+    PublicOrderStatusUpdateRead,
 )
 
 public_router = APIRouter(prefix="/public", tags=["Customer orders"])
 private_router = APIRouter(prefix="/orders", tags=["Customer orders"])
 TRACKING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 TRACKING_CODE_LENGTH = 12
+CUSTOMER_REMINDER_DELAY = timedelta(minutes=30)
 
 
 def _get_public_shop(db: Session, slug: str) -> Shop:
@@ -126,6 +128,73 @@ def _new_tracking_code(db: Session) -> str:
         )
         if db.scalar(select(CustomerOrder.id).where(CustomerOrder.tracking_code == code)) is None:
             return code
+
+
+def _find_order_by_tracking_code(
+    db: Session,
+    tracking_code: str,
+    *,
+    lock: bool = False,
+) -> CustomerOrder:
+    normalized_code = re.sub(r"[\s-]", "", tracking_code).upper()
+    if not re.fullmatch(r"[A-Z0-9]{12}", normalized_code):
+        raise HTTPException(status_code=404, detail="Order not found")
+    query = select(CustomerOrder).where(CustomerOrder.tracking_code == normalized_code)
+    if lock:
+        query = query.with_for_update()
+    order = db.scalar(query)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+def _status_updates(db: Session, order: CustomerOrder) -> list[CustomerOrderEvent]:
+    return db.scalars(
+        select(CustomerOrderEvent)
+        .where(
+            CustomerOrderEvent.order_id == order.id,
+            CustomerOrderEvent.event_type.in_(("order_placed", "status_changed")),
+            CustomerOrderEvent.to_status.is_not(None),
+        )
+        .order_by(CustomerOrderEvent.created_at, CustomerOrderEvent.id)
+    ).all()
+
+
+def _public_tracking_read(db: Session, order: CustomerOrder) -> PublicOrderTrackingRead:
+    events = _status_updates(db, order)
+    status_updates = (
+        [
+            PublicOrderStatusUpdateRead(
+                status=CustomerOrderStatus(event.to_status),
+                created_at=event.created_at,
+            )
+            for event in events
+            if event.to_status is not None
+        ]
+        if events
+        else [
+            PublicOrderStatusUpdateRead(
+                status=order.status,
+                created_at=order.updated_at,
+            )
+        ]
+    )
+    return PublicOrderTrackingRead(
+        order_number=order.order_number,
+        status=order.status,
+        fulfilment=order.fulfilment,
+        payment_status=order.payment_status,
+        created_at=order.created_at,
+        last_status_update_at=events[-1].created_at if events else order.updated_at,
+        customer_reminder_requested_at=order.customer_reminder_requested_at,
+        status_updates=status_updates,
+    )
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _order_number(shop: Shop, order_id: int) -> str:
@@ -256,22 +325,54 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
 
 @public_router.get("/orders/track/{tracking_code}", response_model=PublicOrderTrackingRead)
 def track_customer_order_by_code(tracking_code: str, db: Session = Depends(get_db)):
-    normalized_code = re.sub(r"[\s-]", "", tracking_code).upper()
-    if not re.fullmatch(r"[A-Z0-9]{12}", normalized_code):
-        raise HTTPException(status_code=404, detail="Order not found")
-    order = db.scalar(
-        select(CustomerOrder).where(CustomerOrder.tracking_code == normalized_code)
+    order = _find_order_by_tracking_code(db, tracking_code)
+    return _public_tracking_read(db, order)
+
+
+@public_router.post(
+    "/orders/track/{tracking_code}/reminder",
+    response_model=PublicOrderTrackingRead,
+)
+def request_customer_order_reminder(tracking_code: str, db: Session = Depends(get_db)):
+    order = _find_order_by_tracking_code(db, tracking_code, lock=True)
+    active_statuses = {
+        CustomerOrderStatus.PENDING,
+        CustomerOrderStatus.ACCEPTED,
+        CustomerOrderStatus.PREPARING,
+        CustomerOrderStatus.READY_FOR_PICKUP,
+        CustomerOrderStatus.OUT_FOR_DELIVERY,
+    }
+    if order.status not in active_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail="This order is no longer waiting for an update.",
+        )
+    if order.customer_reminder_requested_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="The shop has already been reminded. They will see your request on the order.",
+        )
+
+    events = _status_updates(db, order)
+    last_status_update = events[-1].created_at if events else order.created_at
+    now = datetime.now(timezone.utc)
+    if _utc_datetime(now) - _utc_datetime(last_status_update) < CUSTOMER_REMINDER_DELAY:
+        raise HTTPException(
+            status_code=409,
+            detail="You can remind the shop after 30 minutes without an order update.",
+        )
+
+    order.customer_reminder_requested_at = now
+    _record_order_event(
+        db,
+        order,
+        "customer_reminder_requested",
+        None,
+        details="Customer requested an order update.",
     )
-    if order is None:
-        raise HTTPException(status_code=404, detail="Order not found")
-    return PublicOrderTrackingRead(
-        order_number=order.order_number,
-        status=order.status,
-        fulfilment=order.fulfilment,
-        payment_status=order.payment_status,
-        created_at=order.created_at,
-        updated_at=order.updated_at,
-    )
+    db.commit()
+    db.refresh(order)
+    return _public_tracking_read(db, order)
 
 
 @public_router.get("/orders/{public_token}", response_model=PublicOrderRead)
@@ -309,6 +410,7 @@ def cancel_public_order(public_token: str, db: Session = Depends(get_db)):
 
     previous_status = order.status
     order.status = CustomerOrderStatus.CANCELLED
+    order.customer_reminder_requested_at = None
     release_order_reservations(db, order.id, None)
     _record_order_event(
         db,
@@ -334,12 +436,15 @@ def list_customer_orders(
     order_status: CustomerOrderStatus | None = Query(None, alias="status"),
     payment_status: OrderPaymentStatus | None = Query(None),
     search: str | None = Query(default=None, max_length=150),
+    reminders_only: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(require_cashier),
 ):
     expire_reservations(db)
     db.commit()
     query = _order_query(None).where(CustomerOrder.shop_id == user.shop_id)
+    if reminders_only:
+        query = query.where(CustomerOrder.customer_reminder_requested_at.is_not(None))
     if order_status is not None:
         query = query.where(CustomerOrder.status == order_status)
     if payment_status is not None:
@@ -435,6 +540,7 @@ def update_customer_order(
             consume_order_reservations(db, order.id)
     previous_status = order.status
     order.status = payload.status
+    order.customer_reminder_requested_at = None
     queue_order_notification(
         db,
         order,

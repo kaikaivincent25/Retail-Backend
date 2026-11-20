@@ -27,7 +27,7 @@ from app.models import (
 )
 from app.models.cash_session import SessionStatus
 from app.models.billing import BillingPlan, Subscription, SubscriptionStatus
-from app.models.customer_order import OrderPaymentStatus
+from app.models.customer_order import CustomerOrderEvent, OrderPaymentStatus
 from app.core.business_time import (
     BUSINESS_TIMEZONE,
     business_day_bounds,
@@ -196,6 +196,71 @@ def test_business_day_bounds_use_nairobi_midnight():
 
     assert start == datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
     assert end == datetime(2026, 11, 19, 21, 0, tzinfo=timezone.utc)
+
+
+def test_customer_can_remind_shop_after_30_minutes_and_staff_roles_see_it(public_order_client):
+    client, variant_id, test_session = public_order_client
+    with test_session() as db:
+        db.add(
+            StockLot(
+                variant_id=variant_id,
+                received_quantity=10,
+                remaining_quantity=10,
+                unit_cost="10.00",
+            )
+        )
+        db.commit()
+
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    tracking_code = response.json()["tracking_code"]
+    reminder_url = f"/public/orders/track/{tracking_code}/reminder"
+    assert client.post(reminder_url).status_code == 409
+
+    with test_session() as db:
+        order = db.query(CustomerOrder).filter_by(tracking_code=tracking_code).one()
+        placed_event = db.query(CustomerOrderEvent).filter_by(
+            order_id=order.id,
+            event_type="order_placed",
+        ).one()
+        placed_event.created_at = datetime.now(timezone.utc) - timedelta(minutes=31)
+        db.commit()
+
+    tracking = client.get(f"/public/orders/track/{tracking_code}")
+    assert tracking.status_code == 200
+    assert len(tracking.json()["status_updates"]) == 1
+    reminded = client.post(reminder_url)
+    assert reminded.status_code == 200, reminded.text
+    assert reminded.json()["customer_reminder_requested_at"] is not None
+    assert client.post(reminder_url).status_code == 409
+
+    staff_order = client.get("/orders").json()[0]
+    assert staff_order["customer_reminder_requested_at"] is not None
+    reminder_list = client.get("/orders?reminders_only=true")
+    assert reminder_list.status_code == 200
+    assert [item["id"] for item in reminder_list.json()] == [staff_order["id"]]
+    history = client.get(f"/orders/{staff_order['id']}/history")
+    assert "customer_reminder_requested" in {
+        event["event_type"] for event in history.json()
+    }
+
+    accepted = client.patch(
+        f"/orders/{staff_order['id']}",
+        json={"status": "accepted"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["customer_reminder_requested_at"] is None
+    assert client.get("/orders?reminders_only=true").json() == []
 
 
 def test_auto_close_uses_provisional_expected_cash_and_carries_it_forward(public_order_client):

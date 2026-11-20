@@ -103,6 +103,9 @@ class CustomerOrder(TimestampMixin, Base):
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     sale_id: Mapped[int | None] = mapped_column(ForeignKey("sales.id"), nullable=True, unique=True)
     customer_notified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    customer_reminder_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     items: Mapped[list["CustomerOrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     customer: Mapped["Customer | None"] = relationship(back_populates="orders")
