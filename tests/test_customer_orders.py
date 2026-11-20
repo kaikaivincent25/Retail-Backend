@@ -347,6 +347,11 @@ def test_order_fulfilment_requires_recipient_and_payment_before_closing(public_o
     assert paid.status_code == 200, paid.text
     assert paid.json()["payment_status"] == "paid"
     assert paid.json()["payment_reference"] == "CASH-001"
+    current_session = client.get("/cash-sessions/current")
+    assert current_session.status_code == 200
+    assert current_session.json()["cash_sales_total"] == "25.00"
+    assert current_session.json()["non_cash_sales_total"] == "0.00"
+    assert current_session.json()["sales_total"] == "25.00"
 
     completed = client.patch(
         f"/orders/{order['id']}",
@@ -427,6 +432,75 @@ def test_manual_mpesa_confirmation_is_audited_and_cannot_be_overwritten(public_o
         params={"receipt_number": "RCP456"},
     )
     assert conflicting_receipt.status_code == 409
+
+
+def test_paid_online_order_counts_in_daily_sales_and_non_cash_session_total(
+    public_order_client,
+):
+    client, variant_id, test_session = public_order_client
+    with test_session() as db:
+        db.add(
+            StockLot(
+                variant_id=variant_id,
+                received_quantity=10,
+                remaining_quantity=10,
+                unit_cost="10.00",
+            )
+        )
+        db.commit()
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "manual_mpesa",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    order = client.get("/orders").json()[0]
+
+    opened = client.post("/cash-sessions/open", json={})
+    assert opened.status_code == 201, opened.text
+    paid = client.post(
+        f"/orders/{order['id']}/payment/confirm",
+        params={"receipt_number": "RCP789"},
+    )
+    assert paid.status_code == 200, paid.text
+
+    session = client.get("/cash-sessions/current").json()
+    assert session["cash_sales_total"] == "0.00"
+    assert session["non_cash_sales_total"] == "25.00"
+    assert session["sales_total"] == "25.00"
+    assert session["expected_cash"] == "0.00"
+
+    summary = client.get("/dashboard/cashier-summary")
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["total_sales"] == "25.00"
+    assert summary.json()["transaction_count"] == 1
+
+    for next_status in ("accepted", "preparing", "out_for_delivery"):
+        changed = client.patch(
+            f"/orders/{order['id']}",
+            json={"status": next_status},
+        )
+        assert changed.status_code == 200, changed.text
+    delivered = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "delivered", "received_by_name": "Amina Otieno"},
+    )
+    assert delivered.status_code == 200, delivered.text
+    completed = client.patch(
+        f"/orders/{order['id']}",
+        json={"status": "completed"},
+    )
+    assert completed.status_code == 200, completed.text
+
+    summary_after_completion = client.get("/dashboard/cashier-summary")
+    assert summary_after_completion.json()["total_sales"] == "25.00"
+    assert summary_after_completion.json()["transaction_count"] == 1
 
 
 def test_customer_can_cancel_an_unpaid_order(public_order_client):

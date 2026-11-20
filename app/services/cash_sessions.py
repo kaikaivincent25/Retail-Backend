@@ -10,6 +10,7 @@ from app.models.activity_log import ActivityAction
 from app.services.audit import log_activity
 from app.models.cash_deposit import CashDeposit, DepositFrequency
 from app.models.customer_payment import CustomerPayment
+from app.models.customer_order import CustomerOrder, OrderPaymentMethod, OrderPaymentStatus
 from app.models.cash_session import CashSession, SessionStatus
 from app.models.expense import Expense
 from app.models.shop import Shop
@@ -79,6 +80,35 @@ def get_cash_session_breakdown(db: Session, session: CashSession) -> dict[str, D
         )
     ) or Decimal("0.00")
 
+    cash_order_sales_total = db.scalar(
+        select(func.coalesce(func.sum(CustomerOrder.total), 0)).where(
+            CustomerOrder.session_id == session.id,
+            CustomerOrder.payment_status == OrderPaymentStatus.PAID,
+            CustomerOrder.payment_method != OrderPaymentMethod.MANUAL_MPESA,
+            CustomerOrder.sale_id.is_(None),
+        )
+    ) or Decimal("0.00")
+    cash_sales_total += cash_order_sales_total
+
+    non_cash_sales_total = db.scalar(
+        select(func.coalesce(func.sum(Sale.total), 0)).where(
+            Sale.session_id == session.id,
+            Sale.payment_method.in_(
+                (PaymentMethod.MPESA, PaymentMethod.POCHI, PaymentMethod.TILL, PaymentMethod.PAYBILL)
+            ),
+            Sale.is_credit.is_(False),
+            Sale.status == SaleStatus.COMPLETED,
+        )
+    ) or Decimal("0.00")
+    non_cash_sales_total += db.scalar(
+        select(func.coalesce(func.sum(CustomerOrder.total), 0)).where(
+            CustomerOrder.session_id == session.id,
+            CustomerOrder.payment_status == OrderPaymentStatus.PAID,
+            CustomerOrder.payment_method == OrderPaymentMethod.MANUAL_MPESA,
+            CustomerOrder.sale_id.is_(None),
+        )
+    ) or Decimal("0.00")
+
     cash_collections_total = db.scalar(
         select(func.coalesce(func.sum(CustomerPayment.amount), 0)).where(
             CustomerPayment.session_id == session.id,
@@ -109,6 +139,8 @@ def get_cash_session_breakdown(db: Session, session: CashSession) -> dict[str, D
     )
     return {
         "cash_sales_total": cash_sales_total,
+        "non_cash_sales_total": non_cash_sales_total,
+        "sales_total": cash_sales_total + non_cash_sales_total,
         "cash_collections_total": cash_collections_total,
         "cash_expenses_total": cash_expenses_total,
         "credit_sales_total": credit_sales_total,
@@ -214,6 +246,8 @@ def close_session(
         )
 
     session.cash_sales_total = breakdown["cash_sales_total"]
+    session.non_cash_sales_total = breakdown["non_cash_sales_total"]
+    session.sales_total = breakdown["sales_total"]
     session.cash_collections_total = breakdown["cash_collections_total"]
     session.cash_expenses_total = breakdown["cash_expenses_total"]
     session.credit_sales_total = breakdown["credit_sales_total"]

@@ -40,7 +40,11 @@ from app.services.accounting import (
     post_completed_sale,
     post_customer_payment,
 )
-from app.services.cash_sessions import close_session, open_session
+from app.services.cash_sessions import (
+    close_session,
+    get_cash_session_breakdown,
+    open_session,
+)
 from app.services.customer_payments import (
     CustomerPaymentError,
     calculate_customer_outstanding,
@@ -122,6 +126,44 @@ def _setup_product_and_lot(db: Session, shop_id: int, user_id: int, price: Decim
     db.add(lot)
     db.commit()
     return variant
+
+
+def test_cash_session_breakdown_includes_non_cash_mpesa_methods(test_setup):
+    db, shop, _, cashier, _ = test_setup
+    session = CashSession(
+        shop_id=shop.id,
+        user_id=cashier.id,
+        opening_cash=Decimal("3.00"),
+    )
+    db.add(session)
+    db.flush()
+    for method in (
+        PaymentMethod.CASH,
+        PaymentMethod.MPESA,
+        PaymentMethod.POCHI,
+        PaymentMethod.TILL,
+        PaymentMethod.PAYBILL,
+    ):
+        db.add(
+            Sale(
+                shop_id=shop.id,
+                cashier_id=cashier.id,
+                session_id=session.id,
+                subtotal=Decimal("10.00"),
+                total=Decimal("10.00"),
+                amount_received=Decimal("10.00"),
+                change=Decimal("0.00"),
+                payment_method=method,
+                status=SaleStatus.COMPLETED,
+            )
+        )
+    db.flush()
+
+    breakdown = get_cash_session_breakdown(db, session)
+    assert breakdown["cash_sales_total"] == Decimal("10.00")
+    assert breakdown["non_cash_sales_total"] == Decimal("40.00")
+    assert breakdown["sales_total"] == Decimal("50.00")
+    assert breakdown["expected_cash"] == Decimal("13.00")
 
 
 def test_credit_sale_requires_due_date_and_active_customer(test_setup):

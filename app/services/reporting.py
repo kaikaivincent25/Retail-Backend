@@ -1,10 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.business_time import business_day_bounds
+from app.core.business_time import BUSINESS_TIMEZONE, business_day_bounds
+from app.models.customer_order import CustomerOrder, OrderPaymentStatus
 from app.models.product import Product
 from app.models.cash_session import CashSession
 from app.models.expense import Expense
@@ -14,7 +15,7 @@ from app.models.variant import Variant
 
 
 def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_dt: datetime) -> dict:
-    total_sales = db.scalar(
+    sale_total = db.scalar(
         select(func.coalesce(func.sum(Sale.total), 0)).where(
             Sale.shop_id == shop_id,
             Sale.status == SaleStatus.COMPLETED,
@@ -22,6 +23,19 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
             Sale.created_at < end_dt,
         )
     ) or Decimal("0.00")
+    paid_order_total, paid_order_count = db.execute(
+        select(
+            func.coalesce(func.sum(CustomerOrder.total), 0),
+            func.count(CustomerOrder.id),
+        ).where(
+            CustomerOrder.shop_id == shop_id,
+            CustomerOrder.payment_status == OrderPaymentStatus.PAID,
+            CustomerOrder.sale_id.is_(None),
+            CustomerOrder.paid_at >= start_dt,
+            CustomerOrder.paid_at < end_dt,
+        )
+    ).one()
+    total_sales = sale_total + paid_order_total
     cogs = db.scalar(
         select(func.coalesce(func.sum(SaleItem.unit_cost_at_sale * SaleItem.quantity), 0))
         .join(Sale, Sale.id == SaleItem.sale_id)
@@ -100,7 +114,9 @@ def _period_financial_totals(db: Session, shop_id: int, start_dt: datetime, end_
     return {
         "total_sales": Decimal(total_sales),
         "estimated_profit": Decimal(profit),
-        "cost_data_complete": incomplete_sales == 0 and incomplete_movements == 0,
+        "cost_data_complete": (
+            incomplete_sales == 0 and incomplete_movements == 0 and paid_order_count == 0
+        ),
     }
 
 
@@ -124,6 +140,17 @@ def summarize_period(
 
     total_sales = sum((s.total for s in sales), Decimal("0.00"))
     transaction_count = len(sales)
+    paid_orders = db.scalars(
+        select(CustomerOrder).where(
+            CustomerOrder.shop_id == shop_id,
+            CustomerOrder.payment_status == OrderPaymentStatus.PAID,
+            CustomerOrder.sale_id.is_(None),
+            CustomerOrder.paid_at >= start_dt,
+            CustomerOrder.paid_at < end_dt,
+        )
+    ).all()
+    total_sales += sum((order.total for order in paid_orders), Decimal("0.00"))
+    transaction_count += len(paid_orders)
 
     expense_query = (
         select(func.coalesce(func.sum(Expense.amount), 0))
@@ -314,6 +341,23 @@ def summarize_period(
         .order_by(func.date(Expense.created_at))
     )
     daily_totals = {entry["date"]: entry for entry in daily_breakdown}
+    for order in paid_orders:
+        paid_at = order.paid_at
+        if paid_at.tzinfo is None:
+            paid_at = paid_at.replace(tzinfo=timezone.utc)
+        day = paid_at.astimezone(BUSINESS_TIMEZONE).date().isoformat()
+        entry = daily_totals.setdefault(
+            day,
+            {
+                "date": day,
+                "total": Decimal("0.00"),
+                "expense_total": Decimal("0.00"),
+                "staff_consumption_total": Decimal("0.00"),
+                "net_sales": Decimal("0.00"),
+            },
+        )
+        entry["total"] += order.total
+        entry["net_sales"] = entry["total"] - entry["expense_total"]
     for row in db.execute(daily_expense_query).all():
         day = row.day.isoformat()
         amount = Decimal(str(row.total)) if row.total is not None else Decimal("0.00")
@@ -401,9 +445,13 @@ def summarize_period(
         "cost_of_goods_sold": Decimal(cost_of_goods_sold).quantize(Decimal("0.01")),
         "gross_profit": Decimal(gross_profit).quantize(Decimal("0.01")),
         "damage_total": Decimal(damage_total).quantize(Decimal("0.01")),
-        "cost_data_complete": incomplete_cost_count == 0 and uncosted_stock_use_count == 0,
+        "cost_data_complete": (
+            incomplete_cost_count == 0
+            and uncosted_stock_use_count == 0
+            and not paid_orders
+        ),
         "profit_status": (
-            "incomplete" if incomplete_cost_count or uncosted_stock_use_count else
+            "incomplete" if incomplete_cost_count or uncosted_stock_use_count or paid_orders else
             "profit" if estimated_profit > 0 else
             "loss" if estimated_profit < 0 else "break_even"
         ),

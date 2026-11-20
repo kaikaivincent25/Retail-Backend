@@ -30,6 +30,8 @@ class CashSessionRead(BaseModel):
     user_id: int
     opening_cash: Decimal
     cash_sales_total: Decimal | None = None
+    non_cash_sales_total: Decimal | None = None
+    sales_total: Decimal | None = None
     cash_collections_total: Decimal | None = None
     cash_expenses_total: Decimal | None = None
     credit_sales_total: Decimal | None = None

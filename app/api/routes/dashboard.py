@@ -174,6 +174,20 @@ def cashier_dashboard_summary(
             Sale.created_at < end,
         )
     ).one()
+    paid_order_total, paid_order_count = db.execute(
+        select(
+            func.coalesce(func.sum(CustomerOrder.total), 0),
+            func.count(CustomerOrder.id),
+        ).where(
+            CustomerOrder.shop_id == user.shop_id,
+            CustomerOrder.payment_status == OrderPaymentStatus.PAID,
+            CustomerOrder.sale_id.is_(None),
+            CustomerOrder.paid_at >= start,
+            CustomerOrder.paid_at < end,
+        )
+    ).one()
+    total_sales += paid_order_total
+    transaction_count += paid_order_count
 
     expense_total = db.scalar(
         select(func.coalesce(func.sum(Expense.amount), 0))

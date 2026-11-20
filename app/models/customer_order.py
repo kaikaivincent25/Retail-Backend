@@ -94,6 +94,9 @@ class CustomerOrder(TimestampMixin, Base):
     paid_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cash_sessions.id"), nullable=True, index=True
+    )
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     sale_id: Mapped[int | None] = mapped_column(ForeignKey("sales.id"), nullable=True, unique=True)

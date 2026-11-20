@@ -388,9 +388,11 @@ def update_customer_order(
                         if order.payment_method == OrderPaymentMethod.MANUAL_MPESA
                         else PaymentMethod.CASH
                     ),
-                    session_id=session.id,
+                    session_id=order.session_id or session.id,
                     customer_id=order.customer_id,
                     allow_confirmed_mpesa=order.payment_method == OrderPaymentMethod.MANUAL_MPESA,
+                    created_at=order.paid_at,
+                    commit=False,
                 )
             except SaleError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -521,6 +523,8 @@ def confirm_order_manual_payment(
     order.payment_reference = receipt
     order.paid_at = datetime.now(timezone.utc)
     order.paid_by_user_id = user.id
+    session = get_open_session(db, user.shop_id, lock=True)
+    order.session_id = session.id if session is not None else None
     _record_order_event(
         db,
         order,
@@ -571,7 +575,8 @@ def record_order_cash_payment(
         )
     if order.payment_status == OrderPaymentStatus.PAID:
         return order
-    if get_open_session(db, user.shop_id, lock=True) is None:
+    session = get_open_session(db, user.shop_id, lock=True)
+    if session is None:
         raise HTTPException(status_code=422, detail="Open a cash session before recording payment")
 
     reference = payload.reference.strip() if payload.reference else None
@@ -579,6 +584,7 @@ def record_order_cash_payment(
     order.payment_reference = reference
     order.paid_at = datetime.now(timezone.utc)
     order.paid_by_user_id = user.id
+    order.session_id = session.id
     _record_order_event(
         db,
         order,
@@ -677,6 +683,8 @@ def process_order_mpesa_callback(db: Session, payload: dict[str, Any]) -> bool:
     order.mpesa_receipt_number = receipt
     order.payment_reference = receipt
     order.paid_at = datetime.now(timezone.utc)
+    session = get_open_session(db, order.shop_id, lock=True)
+    order.session_id = session.id if session is not None else None
     _record_order_event(
         db,
         order,

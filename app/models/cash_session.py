@@ -34,6 +34,8 @@ class CashSession(TimestampMixin, Base):
 
     opening_cash: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     cash_sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    non_cash_sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     cash_collections_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     cash_expenses_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     credit_sales_total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)

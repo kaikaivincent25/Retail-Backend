@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
@@ -38,6 +38,8 @@ def complete_sale(
     initial_payment: Decimal | None = None,
     initial_payment_method: PaymentMethod | None = None,
     allow_confirmed_mpesa: bool = False,
+    created_at: datetime | None = None,
+    commit: bool = True,
 ) -> Sale:
     try:
         customer = None
@@ -148,6 +150,7 @@ def complete_sale(
             amount_received=amount_received,
             change=change,
             payment_method=payment_method,
+            created_at=created_at,
         )
         db.add(sale)
         db.flush()  # assigns sale.id without committing, so sale_items can reference it
@@ -221,7 +224,10 @@ def complete_sale(
         if initial_payment_record is not None:
             post_customer_payment(db, initial_payment_record)
         # 4. Everything succeeded — commit as one unit
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(sale)
         return sale
 
