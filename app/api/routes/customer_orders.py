@@ -54,10 +54,13 @@ from app.schemas.customer_order import (
     CustomerOrderPaymentRecord,
     CustomerOrderEventRead,
     PublicOrderRead,
+    PublicOrderTrackingRead,
 )
 
 public_router = APIRouter(prefix="/public", tags=["Customer orders"])
 private_router = APIRouter(prefix="/orders", tags=["Customer orders"])
+TRACKING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+TRACKING_CODE_LENGTH = 12
 
 
 def _get_public_shop(db: Session, slug: str) -> Shop:
@@ -100,6 +103,7 @@ def _record_order_event(
 def _public_order(order: CustomerOrder) -> PublicOrderRead:
     return PublicOrderRead(
         public_token=order.public_token,
+        tracking_code=order.tracking_code,
         order_number=order.order_number,
         status=order.status,
         fulfilment=order.fulfilment,
@@ -112,6 +116,16 @@ def _public_order(order: CustomerOrder) -> PublicOrderRead:
         items=order.items,
         created_at=order.created_at,
     )
+
+
+def _new_tracking_code(db: Session) -> str:
+    while True:
+        code = "".join(
+            secrets.choice(TRACKING_CODE_ALPHABET)
+            for _ in range(TRACKING_CODE_LENGTH)
+        )
+        if db.scalar(select(CustomerOrder.id).where(CustomerOrder.tracking_code == code)) is None:
+            return code
 
 
 def _order_number(shop: Shop, order_id: int) -> str:
@@ -195,6 +209,7 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
         # replace it once the id has been allocated.
         order_number=_pending_order_number(shop),
         public_token=public_token,
+        tracking_code=_new_tracking_code(db),
         fulfilment=payload.fulfilment,
         payment_method=payload.payment_method,
         customer_name=payload.customer_name.strip(),
@@ -237,6 +252,26 @@ def create_customer_order(slug: str, payload: CustomerOrderCreate, db: Session =
     if saved_order is None:
         raise HTTPException(status_code=500, detail="The order was created but could not be loaded for confirmation")
     return _public_order(saved_order)
+
+
+@public_router.get("/orders/track/{tracking_code}", response_model=PublicOrderTrackingRead)
+def track_customer_order_by_code(tracking_code: str, db: Session = Depends(get_db)):
+    normalized_code = re.sub(r"[\s-]", "", tracking_code).upper()
+    if not re.fullmatch(r"[A-Z0-9]{12}", normalized_code):
+        raise HTTPException(status_code=404, detail="Order not found")
+    order = db.scalar(
+        select(CustomerOrder).where(CustomerOrder.tracking_code == normalized_code)
+    )
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return PublicOrderTrackingRead(
+        order_number=order.order_number,
+        status=order.status,
+        fulfilment=order.fulfilment,
+        payment_status=order.payment_status,
+        created_at=order.created_at,
+        updated_at=order.updated_at,
+    )
 
 
 @public_router.get("/orders/{public_token}", response_model=PublicOrderRead)

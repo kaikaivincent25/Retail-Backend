@@ -101,6 +101,7 @@ class CustomerOrderRead(BaseModel):
 
 class PublicOrderRead(BaseModel):
     public_token: str
+    tracking_code: str
     order_number: str
     status: CustomerOrderStatus
     fulfilment: OrderFulfilment
@@ -112,3 +113,12 @@ class PublicOrderRead(BaseModel):
     total: Decimal
     items: list[CustomerOrderItemRead]
     created_at: datetime
+
+
+class PublicOrderTrackingRead(BaseModel):
+    order_number: str
+    status: CustomerOrderStatus
+    fulfilment: OrderFulfilment
+    payment_status: OrderPaymentStatus
+    created_at: datetime
+    updated_at: datetime

@@ -45,6 +45,7 @@ class CustomerOrder(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("shop_id", "order_number", name="uq_customer_orders_shop_number"),
         UniqueConstraint("public_token", name="uq_customer_orders_public_token"),
+        UniqueConstraint("tracking_code", name="uq_customer_orders_tracking_code"),
         Index("ix_customer_orders_shop_phone_normalized", "shop_id", "customer_phone_normalized"),
     )
 
@@ -52,6 +53,7 @@ class CustomerOrder(TimestampMixin, Base):
     shop_id: Mapped[int] = mapped_column(ForeignKey("shops.id"), nullable=False, index=True)
     order_number: Mapped[str] = mapped_column(String(24), nullable=False)
     public_token: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tracking_code: Mapped[str] = mapped_column(String(12), nullable=False)
     status: Mapped[CustomerOrderStatus] = mapped_column(
         Enum(CustomerOrderStatus, name="customer_order_status", values_callable=lambda e: [m.value for m in e]),
         default=CustomerOrderStatus.PENDING,

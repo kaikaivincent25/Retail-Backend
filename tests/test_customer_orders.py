@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -134,6 +135,60 @@ def test_public_order_is_created_with_human_readable_number(public_order_client)
         customer = db.query(Customer).filter_by(id=order.customer_id).one()
         assert customer.full_name == "Amina Otieno"
         assert customer.phone_normalized == "254712345678"
+
+
+def test_order_tracking_code_is_short_unique_and_only_returns_public_status(public_order_client):
+    client, variant_id, _ = public_order_client
+    response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    tracking_code = body["tracking_code"]
+    assert re.fullmatch(r"[A-HJ-NP-Z2-9]{12}", tracking_code)
+    assert tracking_code != body["public_token"]
+
+    second_response = client.post(
+        "/public/shops/order-test/orders",
+        json={
+            "items": [{"variant_id": variant_id, "quantity": 1}],
+            "customer_name": "Amina Otieno",
+            "customer_phone": "0712345678",
+            "fulfilment": "delivery",
+            "payment_method": "pay_on_delivery",
+            "delivery_address": "Town centre",
+        },
+    )
+    assert second_response.status_code == 201, second_response.text
+    assert second_response.json()["tracking_code"] != tracking_code
+
+    tracking = client.get(f"/public/orders/track/{tracking_code.lower()[:4]}-{tracking_code[4:8]}-{tracking_code[8:]}")
+    assert tracking.status_code == 200, tracking.text
+    assert tracking.json()["order_number"] == body["order_number"]
+    assert tracking.json()["status"] == "pending"
+    assert tracking.json()["payment_status"] == "pending"
+    assert "customer_name" not in tracking.json()
+    assert "customer_phone" not in tracking.json()
+    assert "delivery_address" not in tracking.json()
+    assert "public_token" not in tracking.json()
+
+    order_id = next(
+        order["id"]
+        for order in client.get("/orders").json()
+        if order["order_number"] == body["order_number"]
+    )
+    update = client.patch(f"/orders/{order_id}", json={"status": "accepted"})
+    assert update.status_code == 200, update.text
+    assert client.get(f"/public/orders/track/{tracking_code}").json()["status"] == "accepted"
+    assert client.get("/public/orders/track/INVALID-CODE").status_code == 404
 
 
 def test_business_day_bounds_use_nairobi_midnight():
