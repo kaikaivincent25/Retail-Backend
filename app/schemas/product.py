@@ -122,6 +122,7 @@ class PublicProductRead(BaseModel):
     category: str | None = None
     brand: str | None = None
     description: str | None = None
+    attributes: dict[str, str] = Field(default_factory=dict)
     image_url: str | None = None
     availability_message: str | None = None
     variants: list[PublicVariantRead] = Field(default_factory=list)

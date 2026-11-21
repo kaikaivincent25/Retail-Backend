@@ -19,6 +19,7 @@ def _public_product(product: Product, variants: list[Variant]) -> PublicProductR
         category=product.category,
         brand=product.brand,
         description=product.public_description or product.description,
+        attributes=product.attributes or {},
         image_url=product.public_image_url or product.image_url,
         availability_message=product.availability_message,
         variants=[
