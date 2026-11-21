@@ -27,6 +27,18 @@ class ProductImportAiResponse(BaseModel):
     suggestions: list[ProductImportAiSuggestion] = Field(default_factory=list)
 
 
+class ProductDescriptionAiRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    category: str | None = Field(default=None, max_length=100)
+    brand: str | None = Field(default=None, max_length=100)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    variant_names: list[str] = Field(default_factory=list, max_length=50)
+
+
+class ProductDescriptionAiResponse(BaseModel):
+    description: str = Field(min_length=1, max_length=2000)
+
+
 class BusinessAssistantRequest(BaseModel):
     question: str = Field(min_length=2, max_length=1000)
 

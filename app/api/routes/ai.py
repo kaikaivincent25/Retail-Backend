@@ -25,6 +25,8 @@ from app.models.variant import Variant
 from app.schemas.ai import (
     BusinessAssistantRequest,
     BusinessAssistantResponse,
+    ProductDescriptionAiRequest,
+    ProductDescriptionAiResponse,
     ProductImportAiRequest,
     ProductImportAiResponse,
 )
@@ -143,6 +145,34 @@ async def product_import_suggestions(
         raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
     except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
         logger.exception("Gemini product-import response could not be parsed")
+        raise HTTPException(status_code=502, detail=f"AI returned an unreadable response: {exc}") from exc
+
+
+@router.post("/product-description", response_model=ProductDescriptionAiResponse)
+async def product_description(
+    payload: ProductDescriptionAiRequest,
+    user: User = Depends(require_manager),
+):
+    del user
+    if not settings.GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI is not configured. Add GEMINI_API_KEY to the backend environment.")
+
+    prompt = (
+        "Write a clear, accurate, customer-friendly product description for a small retail shop. "
+        "Return JSON only with one field: description. Keep it between 40 and 500 characters, use plain language, "
+        "explain what the product is and why a customer may want it, and mention useful supplied details such as size, "
+        "material, colour, flavour, compatibility, or pack information. Do not invent features, health claims, prices, "
+        "stock, guarantees, or specifications that are not supplied. Do not use markdown, headings, or quotation marks. "
+        "Use the product name, brand, category, attributes, and variant names below.\n\n"
+        f"Product data:\n{json.dumps(payload.model_dump(), ensure_ascii=False)}"
+    )
+    try:
+        parsed = await generate_ai_json(prompt)
+        return ProductDescriptionAiResponse.model_validate(parsed)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=provider_error(exc)) from exc
+    except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError, ValueError) as exc:
+        logger.exception("Gemini product description response could not be parsed")
         raise HTTPException(status_code=502, detail=f"AI returned an unreadable response: {exc}") from exc
 
 
