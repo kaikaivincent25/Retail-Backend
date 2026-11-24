@@ -20,6 +20,14 @@ class ReportProduct(BaseModel):
     cost_data_complete: bool
 
 
+class MissingCostProduct(BaseModel):
+    variant_id: int
+    variant_name: str
+    quantity_sold: int
+    revenue: Decimal
+    sale_count: int
+
+
 class PeriodComparison(BaseModel):
     start_date: str
     end_date: str
@@ -49,4 +57,5 @@ class PeriodReport(BaseModel):
     low_stock_count: int
     top_products: list[ReportProduct]
     loss_making_products: list[ReportProduct]
+    missing_cost_products: list[MissingCostProduct] = []
     daily_breakdown: list[DailyTotal]

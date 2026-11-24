@@ -309,6 +309,38 @@ def summarize_period(
         for r in db.execute(loss_query).all()
     ] if include_report_details else []
 
+    missing_cost_query = (
+        select(
+            Variant.id.label("variant_id"),
+            Variant.name.label("variant_name"),
+            func.sum(SaleItem.quantity).label("quantity_sold"),
+            func.sum(SaleItem.line_total).label("revenue"),
+            func.count(func.distinct(Sale.id)).label("sale_count"),
+        )
+        .join(SaleItem, SaleItem.variant_id == Variant.id)
+        .join(Sale, Sale.id == SaleItem.sale_id)
+        .join(Product, Product.id == Variant.product_id)
+        .where(
+            Product.shop_id == shop_id,
+            Sale.status == SaleStatus.COMPLETED,
+            Sale.created_at >= start_dt,
+            Sale.created_at < end_dt,
+            SaleItem.cost_is_known_at_sale.is_(False),
+        )
+        .group_by(Variant.id, Variant.name)
+        .order_by(func.sum(SaleItem.quantity).desc())
+    )
+    missing_cost_products = [
+        {
+            "variant_id": row.variant_id,
+            "variant_name": row.variant_name,
+            "quantity_sold": int(row.quantity_sold),
+            "revenue": row.revenue,
+            "sale_count": int(row.sale_count),
+        }
+        for row in db.execute(missing_cost_query).all()
+    ] if include_report_details else []
+
     daily_query = (
         select(func.date(Sale.created_at).label("day"), func.sum(Sale.total).label("total"))
         .where(
@@ -459,5 +491,6 @@ def summarize_period(
         "low_stock_count": low_stock_count,
         "top_products": top_products,
         "loss_making_products": loss_making_products,
+        "missing_cost_products": missing_cost_products,
         "daily_breakdown": daily_breakdown,
     }
